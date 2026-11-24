@@ -1,24 +1,17 @@
+# MR Remote fork: Windows x64 validation only; upstream multi-platform build is preserved separately.
 name: Full Flutter CI
 
 on:
-  workflow_dispatch:
   pull_request:
+    branches: [develop, main]
     paths-ignore:
-    - "docs/**"
-    - "README.md"
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - ".github/**"
-      - "docs/**"
-      - "README.md"
-      - "res/**"
-      - "appimage/**"
-      - "flatpak/**"
+      - 'docs/**'
+      - 'infra/**'
+      - 'README.md'
+
+permissions:
+  contents: read
 
 jobs:
   run-ci:
-    uses: ./.github/workflows/flutter-build.yml
-    with:
-      upload-artifact: false
+    uses: ./.github/workflows/mr-remote-windows.yml

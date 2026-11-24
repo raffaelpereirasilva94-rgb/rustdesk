@@ -3,9 +3,13 @@
 name: MR Remote - Windows x64 validation
 on:
   workflow_dispatch:
+  workflow_call:
   push:
-    branches: [feature/v0.1-foundation]
-    paths: ['.github/workflows/mr-remote-windows.yml']
+    branches: [develop, main]
+    paths-ignore:
+      - 'docs/**'
+      - 'infra/**'
+      - 'README.md'
 permissions:
   contents: read
 env:
