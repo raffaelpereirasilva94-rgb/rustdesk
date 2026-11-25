@@ -1,0 +1,39 @@
+version: 2.1
+
+# Initial Windows runner smoke check only. No application build or deploy.
+jobs:
+  windows-diagnostic:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Verify repository and Windows x64 runner
+          command: |
+            $ErrorActionPreference = 'Stop'
+            if (-not [Environment]::Is64BitOperatingSystem) {
+              throw 'Windows x64 is required.'
+            }
+            foreach ($file in @('Cargo.toml', 'Cargo.lock', 'flutter/pubspec.yaml', 'flutter/pubspec.lock', 'build.py')) {
+              if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+                throw "Missing required tracked file: $file"
+              }
+            }
+            git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify checked-out revision.' }
+            Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-Table
+            Get-CimInstance Win32_ComputerSystem | Select-Object @{N='RAM_GiB';E={[math]::Round($_.TotalPhysicalMemory/1GB,2)}} | Format-Table
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            foreach ($tool in @('git','python','cmake','rustc','cargo','flutter','clang','ninja','msbuild','vcpkg')) {
+              $command = Get-Command $tool -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($command) { Write-Host "$tool : $($command.Source)" }
+              else { Write-Host "$tool : NOT FOUND ON PATH" }
+            }
+            Write-Host 'WINDOWS_DIAGNOSTIC_OK (not an application build or test)'
+
+workflows:
+  starter:
+    jobs:
+      - windows-diagnostic
