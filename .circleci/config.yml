@@ -293,7 +293,12 @@ jobs:
                 & "$flutterRoot\bin\flutter.bat" pub get
                 Assert-NativeExit 'Flutter bridge dependencies'
               } finally { Pop-Location }
-              & "$env:CARGO_HOME\bin\flutter_rust_bridge_codegen.exe" --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+              # ffigen v8 locates libclang.dll under the LLVM root's bin directory.
+              $llvmRoot = Join-Path $root 'llvm'
+              $libclang = Join-Path $llvmRoot 'bin\libclang.dll'
+              if (-not (Test-Path -LiteralPath $libclang -PathType Leaf)) { throw "Required libclang.dll missing: $libclang" }
+              Write-Host "FFIGEN_LLVM_ROOT=$llvmRoot"
+              & "$env:CARGO_HOME\bin\flutter_rust_bridge_codegen.exe" --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h --llvm-path $llvmRoot
               Assert-NativeExit 'Bridge generation'
               Copy-Item -LiteralPath 'flutter/macos/Runner/bridge_generated.h' -Destination 'flutter/ios/Runner/bridge_generated.h' -Force
             } finally {
