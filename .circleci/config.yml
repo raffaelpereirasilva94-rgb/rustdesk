@@ -1,6 +1,6 @@
 version: 2.1
 
-# Windows runner diagnostics and staged Flutter bootstrap. No application build or deploy.
+# Windows diagnostics, toolchain bootstrap and native dependency cache. No application build or deploy.
 jobs:
   windows-diagnostic:
     machine:
@@ -93,6 +93,19 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Calculate vcpkg cache identity
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $manifest = (Get-FileHash -LiteralPath 'vcpkg.json' -Algorithm SHA256).Hash
+            $ports = git rev-parse HEAD:res/vcpkg
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify overlay ports.' }
+            $triplets = git rev-parse HEAD:res/vcpkg-triplets
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify overlay triplets.' }
+            @($manifest,$ports,$triplets) | Set-Content -Encoding ASCII '.mr-vcpkg-cache-key'
+      - restore_cache:
+          keys:
+            - 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
+      - run:
           name: Prepare pinned Rust LLVM and vcpkg tools
           command: |
             $ErrorActionPreference = 'Stop'
@@ -100,7 +113,7 @@ jobs:
             function Assert-NativeExit([string]$action) {
               if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
             }
-            $root = Join-Path $env:TEMP 'mr-native-tools'
+            $root = 'C:\mr-native-tools'
             New-Item -ItemType Directory -Force $root | Out-Null
             $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
             if (-not (Test-Path $vswhere)) { throw 'vswhere is missing.' }
@@ -182,7 +195,43 @@ jobs:
             & "$vcpkg\vcpkg.exe" version
             Assert-NativeExit 'vcpkg version'
             Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
-            Write-Host 'NATIVE_BOOTSTRAP_OK (tool installation only; no vcpkg libraries or application build/tests)'
+            Write-Host 'NATIVE_BOOTSTRAP_OK'
+            # Keep these steps in the same agent and PowerShell process as bootstrap.
+            # The manifest selects historical port versions; shallow history can omit their trees.
+            $shallow = & git -C $vcpkg rev-parse --is-shallow-repository
+            Assert-NativeExit 'vcpkg history check'
+            if ($shallow -eq 'true') {
+              git -C $vcpkg fetch --unshallow origin $pin
+              Assert-NativeExit 'vcpkg historical port fetch'
+            }
+            $cachePath = Join-Path (Get-Location).Path '.mr-vcpkg-binary-cache'
+            New-Item -ItemType Directory -Force $cachePath | Out-Null
+            $env:VCPKG_BINARY_SOURCES = "clear;files,$cachePath,readwrite"
+            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
+            $env:VCPKG_MAX_CONCURRENCY = '4'
+            $installed = Join-Path $vcpkg 'installed'
+            Write-Host "VCPKG_ROOT=$vcpkg"
+            Write-Host "VCPKG_BINARY_CACHE=$cachePath"
+            Write-Host 'Installing the original RustDesk vcpkg manifest (x64-windows-static).'
+            & "$vcpkg\vcpkg.exe" install --triplet x64-windows-static --host-triplet x64-windows-static "--x-install-root=$installed" --clean-after-build
+            Assert-NativeExit 'vcpkg manifest installation'
+            if (-not (Test-Path (Join-Path $installed 'vcpkg\status'))) { throw 'vcpkg installed status missing.' }
+            foreach ($package in @('aom','libjpeg-turbo','opus','libvpx','libyuv','mfx-dispatch','ffmpeg')) {
+              $listFiles = @(Get-ChildItem -Path (Join-Path $installed 'vcpkg\info') -Filter "$($package)_*x64-windows-static.list" -ErrorAction Stop)
+              if ($listFiles.Count -eq 0) { throw "Expected installed package missing: $package" }
+              Write-Host "Installed: $package"
+            }
+            $cacheFiles = @(Get-ChildItem -LiteralPath $cachePath -File -Recurse)
+            $cacheBytes = ($cacheFiles | Measure-Object Length -Sum).Sum
+            if ($cacheFiles.Count -eq 0) { throw 'No binary cache packages found.' }
+            Write-Host "Cache files: $($cacheFiles.Count); size MiB: $([math]::Round($cacheBytes/1MB,2))"
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'VCPKG_LIBRARIES_OK (native dependencies only; no application build or tests)'
+          no_output_timeout: 15m
+      - save_cache:
+          key: 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
+          paths:
+            - .mr-vcpkg-binary-cache
 
 workflows:
   starter:
