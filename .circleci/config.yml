@@ -1,6 +1,6 @@
 version: 2.1
 
-# Windows diagnostics, native libraries, bridge generation, Rust and Flutter release builds. No deployment or final packaging.
+# Windows diagnostics, native libraries, Rust and Flutter release builds, unsigned test packaging. No deploy.
 jobs:
   windows-diagnostic:
     machine:
@@ -710,6 +710,147 @@ jobs:
           path: .mr-flutter-output/windows-app
           destination: windows-app-preview
 
+
+  windows-package:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .mr-package-input
+      - run:
+          name: Assemble unsigned Windows x64 distribution
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            function Assert-NonEmptyFile([string]$file) {
+              $item = Get-Item -LiteralPath $file -ErrorAction Stop
+              if ($item.PSIsContainer -or $item.Length -le 0) { throw "Invalid package file: $file" }
+            }
+            function Assert-Sha256([string]$file,[string]$expected) {
+              Assert-NonEmptyFile $file
+              $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+              if ($actual -ine $expected) { throw "SHA256 mismatch: $file" }
+              Write-Host "SHA256_OK: $file"
+            }
+            $repo = (Get-Location).Path
+            $workspace = Join-Path $repo '.mr-package-input'
+            $inputApp = Join-Path $workspace 'windows-app'
+            if (-not (Test-Path -LiteralPath $inputApp -PathType Container)) { throw 'Missing Flutter build workspace.' }
+            $stage = Join-Path $repo '.mr-package-stage'
+            $output = Join-Path $repo '.mr-package-output'
+            $downloads = Join-Path $env:TEMP 'mr-package-downloads'
+            New-Item -ItemType Directory -Force $stage,$output,$downloads | Out-Null
+            Copy-Item -Path (Join-Path $inputApp '*') -Destination $stage -Recurse -Force
+            $required = @('rustdesk.exe','librustdesk.dll','flutter_windows.dll','dylib_virtual_display.dll','data\app.so','data\icudtl.dat')
+            foreach ($file in $required) {
+              Assert-NonEmptyFile (Join-Path $stage $file)
+              $originalHash = (Get-FileHash -LiteralPath (Join-Path $inputApp $file) -Algorithm SHA256).Hash
+              Assert-Sha256 (Join-Path $stage $file) $originalHash
+            }
+            # Match the original, pinned supplemental component build.
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
+            $msbuild = Join-Path $vs 'MSBuild\Current\Bin\MSBuild.exe'
+            Assert-NonEmptyFile $msbuild
+            $topmost = Join-Path $downloads 'RustDeskTempTopMostWindow'
+            $topmostPin = 'ecd8d6a139eee76845ea66423fb739af450fda90'
+            git clone https://github.com/rustdesk-org/RustDeskTempTopMostWindow $topmost
+            Assert-NativeExit 'Supplemental component checkout'
+            git -C $topmost checkout --detach $topmostPin
+            Assert-NativeExit 'Supplemental component pin'
+            $actualPin = & git -C $topmost rev-parse HEAD
+            Assert-NativeExit 'Supplemental component revision'
+            if ($actualPin -ne $topmostPin) { throw 'Wrong supplemental component revision.' }
+            Push-Location $topmost
+            try {
+              & $msbuild 'WindowInjection/WindowInjection.vcxproj' '-p:Configuration=Release' '-p:Platform=x64' '/p:TargetVersion=Windows10'
+              Assert-NativeExit 'Supplemental component compilation'
+            } finally { Pop-Location }
+            $injection = Join-Path $topmost 'WindowInjection\x64\Release\WindowInjection.dll'
+            Assert-NonEmptyFile $injection
+            Copy-Item -LiteralPath $injection -Destination $stage -Force
+            Write-Host 'WINDOW_COMPONENT_OK'
+            # Preserve the original monitor driver archive layout; do not install drivers on CI.
+            $monitorZip = Join-Path $downloads 'usbmmidd_v2.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip' -OutFile $monitorZip
+            Assert-NonEmptyFile $monitorZip
+            if ((Get-Item -LiteralPath $monitorZip).Length -ne 199309) { throw 'Monitor driver archive size differs from inspected upstream release asset.' }
+            Write-Host "Monitor archive SHA256 (recorded, not pinned): $((Get-FileHash -LiteralPath $monitorZip -Algorithm SHA256).Hash)"
+            $monitorExtract = Join-Path $downloads 'monitor'
+            Expand-Archive -LiteralPath $monitorZip -DestinationPath $monitorExtract -Force
+            $monitor = Join-Path $monitorExtract 'usbmmidd_v2'
+            if (-not (Test-Path -LiteralPath $monitor -PathType Container)) { throw 'Unexpected monitor driver archive layout.' }
+            foreach ($name in @('Win32','deviceinstaller64.exe','deviceinstaller.exe','usbmmidd.bat')) {
+              $remove = Join-Path $monitor $name
+              if (Test-Path -LiteralPath $remove) { Remove-Item -LiteralPath $remove -Recurse -Force }
+            }
+            $monitorFiles = @(Get-ChildItem -LiteralPath $monitor -Recurse -File)
+            if ($monitorFiles.Count -eq 0) { throw 'Monitor driver archive is empty after filtering.' }
+            Copy-Item -LiteralPath $monitor -Destination $stage -Recurse -Force
+            Write-Host 'VIRTUAL_MONITOR_FILES_OK'
+            # Pin printer release asset digests observed in GitHub release metadata.
+            # Unlike the original optional step, fail closed if these expected assets cannot be verified.
+            $printerBase = 'https://github.com/rustdesk/hbb_common/releases/download/driver'
+            $driverZip = Join-Path $downloads 'rustdesk_printer_driver_v4-1.4.zip'
+            $adapterZip = Join-Path $downloads 'printer_driver_adapter.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri "$printerBase/rustdesk_printer_driver_v4-1.4.zip" -OutFile $driverZip
+            Invoke-WebRequest -UseBasicParsing -Uri "$printerBase/printer_driver_adapter.zip" -OutFile $adapterZip
+            Assert-Sha256 $driverZip 'c4cf4d3b48c4d9079b243edc43bb1db03b076282bc259c9f49883e9db20fa8b5'
+            Assert-Sha256 $adapterZip 'e90e5d52c8807b4c6293c78a52479338715e0bf396b1b34802777b8c452e6781'
+            $driverExtract = Join-Path $downloads 'printer'
+            $adapterExtract = Join-Path $downloads 'adapter'
+            Expand-Archive -LiteralPath $driverZip -DestinationPath $driverExtract -Force
+            Expand-Archive -LiteralPath $adapterZip -DestinationPath $adapterExtract -Force
+            $driver = Join-Path $driverExtract 'rustdesk_printer_driver_v4-1.4'
+            if (-not (Test-Path -LiteralPath $driver -PathType Container)) { throw 'Unexpected printer driver archive layout.' }
+            if (@(Get-ChildItem -LiteralPath $driver -File -Recurse).Count -eq 0) { throw 'Printer driver directory empty.' }
+            $drivers = Join-Path $stage 'drivers'
+            New-Item -ItemType Directory -Force $drivers | Out-Null
+            Copy-Item -LiteralPath $driver -Destination (Join-Path $drivers 'RustDeskPrinterDriver') -Recurse -Force
+            $adapter = Join-Path $adapterExtract 'printer_driver_adapter.dll'
+            Assert-NonEmptyFile $adapter
+            Copy-Item -LiteralPath $adapter -Destination $stage -Force
+            Write-Host 'PRINTER_DRIVER_FILES_OK'
+            # Record individual file hashes and archive all application dependencies.
+            $manifest = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($stage.Length + 1).Replace('\','/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash *$relative"
+            })
+            if ($manifest.Count -eq 0) { throw 'Package manifest is empty.' }
+            $manifest | Set-Content -LiteralPath (Join-Path $output 'files.sha256') -Encoding UTF8
+            $zipName = 'MRRemote-v0.1.0-windows-x64-test-unsigned.zip'
+            $zip = Join-Path $output $zipName
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+            Assert-NonEmptyFile $zip
+            $check = Join-Path $downloads 'verify-archive'
+            Expand-Archive -LiteralPath $zip -DestinationPath $check -Force
+            foreach ($line in $manifest) {
+              if ($line -notmatch '^([0-9a-f]{64}) \*(.+)$') { throw 'Invalid file manifest.' }
+              $expected = $Matches[1]
+              $relative = $Matches[2]
+              Assert-Sha256 (Join-Path $check $relative) $expected
+            }
+            $archiveHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$archiveHash *$zipName" | Set-Content -LiteralPath "$zip.sha256" -Encoding ASCII
+            Write-Host "PACKAGE_SHA256=$archiveHash"
+            Write-Host "PACKAGE_FILES=$($manifest.Count)"
+            Write-Host "PACKAGE_SIZE_MIB=$([math]::Round((Get-Item -LiteralPath $zip).Length/1MB,2))"
+            Write-Host 'WINDOWS_PACKAGE_OK (unsigned test ZIP; application runtime and automated tests pending)'
+          no_output_timeout: 15m
+      - store_artifacts:
+          path: .mr-package-output
+          destination: mr-remote-windows-x64-test
+
 workflows:
   starter:
     jobs:
@@ -726,3 +867,6 @@ workflows:
       - windows-flutter-build:
           requires:
             - windows-core-build
+      - windows-package:
+          requires:
+            - windows-flutter-build
