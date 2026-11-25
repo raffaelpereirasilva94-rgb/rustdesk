@@ -1,6 +1,6 @@
 version: 2.1
 
-# Windows diagnostics, toolchain bootstrap and native dependency cache. No application build or deploy.
+# Windows diagnostics, cached native libraries and bridge generation. No application build or deploy.
 jobs:
   windows-diagnostic:
     machine:
@@ -206,6 +206,8 @@ jobs:
             }
             $cachePath = Join-Path (Get-Location).Path '.mr-vcpkg-binary-cache'
             New-Item -ItemType Directory -Force $cachePath | Out-Null
+            $restoredFiles = @(Get-ChildItem -LiteralPath $cachePath -File -Recurse)
+            Write-Host "VCPKG_CACHE_FILES_BEFORE_INSTALL=$($restoredFiles.Count)"
             $env:VCPKG_BINARY_SOURCES = "clear;files,$cachePath,readwrite"
             $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
             $env:VCPKG_MAX_CONCURRENCY = '4'
@@ -232,6 +234,100 @@ jobs:
           key: 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
           paths:
             - .mr-vcpkg-binary-cache
+
+
+      - run:
+          name: Generate pinned Flutter Rust bridge on Windows
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            # Same agent as the successful native bootstrap; environment is per run step.
+            $repo = (Get-Location).Path
+            $root = 'C:\mr-native-tools'
+            $env:CARGO_HOME = Join-Path $root 'cargo'
+            $env:RUSTUP_HOME = Join-Path $root 'rustup'
+            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
+            $env:LIBCLANG_PATH = Join-Path $root 'llvm\bin'
+            $env:VCPKG_ROOT = Join-Path $root 'vcpkg'
+            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
+            $env:VCPKG_DEFAULT_TRIPLET = 'x64-windows-static'
+            $env:CI = 'true'
+            $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+            $env:CARGO_BUILD_JOBS = '4'
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
+            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            $flutterRoot = 'C:\mr-flutter-bridge'
+            git clone --depth 1 --branch 3.22.3 https://github.com/flutter/flutter.git $flutterRoot
+            Assert-NativeExit 'Flutter 3.22.3 checkout'
+            $env:Path = "$flutterRoot\bin;$env:CARGO_HOME\bin;$env:LIBCLANG_PATH;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
+            git submodule update --init --recursive
+            Assert-NativeExit 'Repository submodules'
+            $version = & rustc --version
+            Assert-NativeExit 'Rust version'
+            if ($version -notmatch '^rustc 1\.75\.0 ') { throw "Unexpected Rust version: $version" }
+            & "$flutterRoot\bin\flutter.bat" --version
+            Assert-NativeExit 'Flutter bridge SDK initialization'
+            cargo install cargo-expand --version 1.0.95 --locked
+            Assert-NativeExit 'cargo-expand installation'
+            cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+            Assert-NativeExit 'Flutter Rust bridge codegen installation'
+            $pubspec = Join-Path $repo 'flutter\pubspec.yaml'
+            $lock = Join-Path $repo 'flutter\pubspec.lock'
+            $pubspecBytes = [IO.File]::ReadAllBytes($pubspec)
+            $lockBytes = [IO.File]::ReadAllBytes($lock)
+            try {
+              # Match the successful upstream 3.22.3 bridge job; restore manifests afterwards.
+              $original = [IO.File]::ReadAllText($pubspec)
+              if (-not $original.Contains('extended_text: 14.0.0')) { throw 'Expected extended_text pin missing.' }
+              [IO.File]::WriteAllText($pubspec,$original.Replace('extended_text: 14.0.0','extended_text: 13.0.0'),(New-Object System.Text.UTF8Encoding($false)))
+              Push-Location (Join-Path $repo 'flutter')
+              try {
+                & "$flutterRoot\bin\flutter.bat" pub get
+                Assert-NativeExit 'Flutter bridge dependencies'
+              } finally { Pop-Location }
+              & "$env:CARGO_HOME\bin\flutter_rust_bridge_codegen.exe" --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+              Assert-NativeExit 'Bridge generation'
+              Copy-Item -LiteralPath 'flutter/macos/Runner/bridge_generated.h' -Destination 'flutter/ios/Runner/bridge_generated.h' -Force
+            } finally {
+              [IO.File]::WriteAllBytes($pubspec,$pubspecBytes)
+              [IO.File]::WriteAllBytes($lock,$lockBytes)
+            }
+            $files = @(
+              'src/bridge_generated.rs',
+              'src/bridge_generated.io.rs',
+              'flutter/lib/generated_bridge.dart',
+              'flutter/lib/generated_bridge.freezed.dart',
+              'flutter/macos/Runner/bridge_generated.h',
+              'flutter/ios/Runner/bridge_generated.h'
+            )
+            foreach ($file in $files) {
+              if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing generated file: $file" }
+              $item = Get-Item -LiteralPath $file
+              if ($item.Length -le 0) { throw "Empty generated file: $file" }
+              $destination = Join-Path (Join-Path $repo '.mr-bridge') $file
+              New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+              Copy-Item -LiteralPath $file -Destination $destination -Force
+              Write-Host "Generated: $file ($($item.Length) bytes)"
+            }
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'BRIDGE_GENERATION_OK (six generated source files; no application build or tests)'
+          no_output_timeout: 15m
+      - persist_to_workspace:
+          root: .mr-bridge
+          paths:
+            - src
+            - flutter
+      - store_artifacts:
+          path: .mr-bridge
+          destination: bridge-artifact
 
 workflows:
   starter:
