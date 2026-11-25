@@ -1,6 +1,6 @@
 version: 2.1
 
-# Windows diagnostics, cached native libraries, bridge generation and Rust release library build. No Flutter application build or deploy.
+# Windows diagnostics, native libraries, bridge generation, Rust and Flutter release builds. No deployment or final packaging.
 jobs:
   windows-diagnostic:
     machine:
@@ -587,6 +587,129 @@ jobs:
           path: .mr-core
           destination: rust-core-artifact
 
+
+  windows-flutter-build:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .mr-build-input
+      - run:
+          name: Compile pinned Flutter Windows x64 interface
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $repo = (Get-Location).Path
+            $workspace = Join-Path $repo '.mr-build-input'
+            $files = @(
+              'src/bridge_generated.rs',
+              'src/bridge_generated.io.rs',
+              'flutter/lib/generated_bridge.dart',
+              'flutter/lib/generated_bridge.freezed.dart',
+              'flutter/macos/Runner/bridge_generated.h',
+              'flutter/ios/Runner/bridge_generated.h',
+              'target/release/librustdesk.dll',
+              'target/release/deps/dylib_virtual_display.dll'
+            )
+            foreach ($file in $files) {
+              $source = Join-Path $workspace $file
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing workspace input: $file" }
+              if ((Get-Item -LiteralPath $source).Length -le 0) { throw "Empty workspace input: $file" }
+              $destination = Join-Path $repo $file
+              New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+              Copy-Item -LiteralPath $source -Destination $destination -Force
+              Write-Host "Restored: $file"
+            }
+            $featureFile = Join-Path $workspace 'release-features.txt'
+            $features = (Get-Content -LiteralPath $featureFile -Raw).Trim()
+            foreach ($feature in @('flutter','hwcodec','vram')) {
+              if (($features -split ',') -notcontains $feature) { throw "Missing release feature: $feature" }
+            }
+            Write-Host "MR_RELEASE_FEATURES=$features"
+            git submodule update --init --recursive
+            Assert-NativeExit 'Repository submodules'
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            $flutterRoot = 'C:\mr-flutter-release'
+            git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git $flutterRoot
+            Assert-NativeExit 'Flutter release SDK checkout'
+            $env:Path = "$flutterRoot\bin;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
+            $env:CI = 'true'
+            $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+            $flutter = Join-Path $flutterRoot 'bin\flutter.bat'
+            $flutterVersion = & $flutter --version | Out-String
+            Assert-NativeExit 'Flutter release SDK initialization'
+            Write-Host $flutterVersion
+            if ($flutterVersion -notmatch 'Flutter 3\.24\.5\b') { throw 'Unexpected Flutter version.' }
+            & $flutter config --no-analytics
+            Assert-NativeExit 'Disable Flutter analytics'
+            & $flutter precache --windows
+            Assert-NativeExit 'Windows engine precache'
+            # Match the successful GitHub Actions x64 build's custom engine and SDK patch.
+            $engineDir = Join-Path $flutterRoot 'bin\cache\artifacts\engine\windows-x64-release'
+            if (-not (Test-Path -LiteralPath $engineDir -PathType Container)) { throw 'Flutter Windows release engine directory missing.' }
+            $engineZip = Join-Path $env:TEMP 'mr-windows-x64-release.zip'
+            $engineExtract = Join-Path $env:TEMP 'mr-windows-x64-release'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip' -OutFile $engineZip
+            Write-Host "Custom engine archive SHA256: $((Get-FileHash -LiteralPath $engineZip -Algorithm SHA256).Hash)"
+            Expand-Archive -LiteralPath $engineZip -DestinationPath $engineExtract -Force
+            if (-not (Test-Path -LiteralPath (Join-Path $engineExtract 'flutter_windows.dll') -PathType Leaf)) { throw 'Custom engine archive layout unexpected; flutter_windows.dll missing.' }
+            Copy-Item -Path (Join-Path $engineExtract '*') -Destination $engineDir -Recurse -Force
+            $engineHash = (Get-FileHash -LiteralPath (Join-Path $engineDir 'flutter_windows.dll') -Algorithm SHA256).Hash
+            Write-Host "Custom engine DLL SHA256: $engineHash"
+            $patch = Join-Path $repo '.github\patches\flutter_3.24.4_dropdown_menu_enableFilter.diff'
+            git -C $flutterRoot apply --check $patch
+            Assert-NativeExit 'Flutter release patch compatibility'
+            git -C $flutterRoot apply $patch
+            Assert-NativeExit 'Apply Flutter release patch'
+            Write-Host 'FLUTTER_RELEASE_ENGINE_AND_PATCH_OK'
+            Push-Location (Join-Path $repo 'flutter')
+            try {
+              & $flutter pub get
+              Assert-NativeExit 'Flutter release dependencies'
+              & $flutter build windows --release --no-pub
+              Assert-NativeExit 'Flutter Windows release build'
+            } finally { Pop-Location }
+            $release = Join-Path $repo 'flutter\build\windows\x64\runner\Release'
+            if (-not (Test-Path -LiteralPath $release -PathType Container)) { throw 'Flutter release folder missing.' }
+            Copy-Item -LiteralPath (Join-Path $repo 'target\release\deps\dylib_virtual_display.dll') -Destination $release -Force
+            $required = @('rustdesk.exe','librustdesk.dll','flutter_windows.dll','dylib_virtual_display.dll','data\app.so','data\icudtl.dat')
+            foreach ($file in $required) {
+              $item = Get-Item -LiteralPath (Join-Path $release $file) -ErrorAction Stop
+              if ($item.PSIsContainer -or $item.Length -le 0) { throw "Invalid release output: $file" }
+              Write-Host "Built: $file ($($item.Length) bytes); SHA256=$((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash)"
+            }
+            foreach ($file in @('librustdesk.dll','dylib_virtual_display.dll')) {
+              $original = if ($file -eq 'librustdesk.dll') { 'target\release\librustdesk.dll' } else { 'target\release\deps\dylib_virtual_display.dll' }
+              if ((Get-FileHash -LiteralPath (Join-Path $repo $original) -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $release $file) -Algorithm SHA256).Hash) {
+                throw "Rust library mismatch: $file"
+              }
+            }
+            if ((Get-FileHash -LiteralPath (Join-Path $release 'flutter_windows.dll') -Algorithm SHA256).Hash -ne $engineHash) { throw 'Release did not include the selected custom Flutter engine.' }
+            $stage = Join-Path $repo '.mr-flutter-output\windows-app'
+            New-Item -ItemType Directory -Force $stage | Out-Null
+            Copy-Item -Path (Join-Path $release '*') -Destination $stage -Recurse -Force
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'FLUTTER_WINDOWS_BUILD_OK (unsigned application folder; supplemental drivers, packaging and tests pending)'
+          no_output_timeout: 25m
+      - persist_to_workspace:
+          root: .mr-flutter-output
+          paths:
+            - windows-app
+      - store_artifacts:
+          path: .mr-flutter-output/windows-app
+          destination: windows-app-preview
+
 workflows:
   starter:
     jobs:
@@ -600,3 +723,6 @@ workflows:
       - windows-core-build:
           requires:
             - windows-native-bootstrap
+      - windows-flutter-build:
+          requires:
+            - windows-core-build
