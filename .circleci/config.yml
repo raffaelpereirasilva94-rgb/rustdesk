@@ -84,6 +84,99 @@ jobs:
             Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
             Write-Host 'FLUTTER_BOOTSTRAP_OK (native toolchain inventory only; no application build or tests)'
 
+
+  windows-native-bootstrap:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Prepare pinned Rust LLVM and vcpkg tools
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $root = Join-Path $env:TEMP 'mr-native-tools'
+            New-Item -ItemType Directory -Force $root | Out-Null
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path $vswhere)) { throw 'vswhere is missing.' }
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio 2022 discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 MSVC x64 component is not installed.' }
+            Write-Host "Selected VS 2022: $vs"
+            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            foreach ($path in @("$cmake\cmake.exe","$ninja\ninja.exe")) {
+              if (-not (Test-Path $path)) { throw "Required tool missing: $path" }
+            }
+            $env:Path = "$cmake;$ninja;$env:Path"
+            cmake --version
+            Assert-NativeExit 'CMake version'
+            ninja --version
+            Assert-NativeExit 'Ninja version'
+            $env:CARGO_HOME = Join-Path $root 'cargo'
+            $env:RUSTUP_HOME = Join-Path $root 'rustup'
+            $env:RUSTUP_INIT_SKIP_PATH_CHECK = 'yes'
+            $installer = Join-Path $root 'rustup-init.exe'
+            $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $installer
+            $checksum = (Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256").Content.Trim().Split(' ')[0]
+            if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $checksum) { throw 'rustup installer checksum mismatch.' }
+            & $installer -y --no-modify-path --profile minimal --default-host x86_64-pc-windows-msvc --default-toolchain 1.75.0
+            Assert-NativeExit 'Rustup installation'
+            $env:Path = "$env:CARGO_HOME\bin;$env:Path"
+            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
+            rustup component add rustfmt
+            Assert-NativeExit 'Rustfmt installation'
+            $rustVersion = & rustc --version
+            Assert-NativeExit 'Rust version'
+            Write-Host $rustVersion
+            if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw 'Wrong Rust version.' }
+            cargo --version
+            Assert-NativeExit 'Cargo version'
+            # Match the release used by the successful GitHub Actions Windows build.
+            $llvmInstaller = Join-Path $root 'LLVM-15.0.6-win64.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.6/LLVM-15.0.6-win64.exe' -OutFile $llvmInstaller
+            Write-Host "LLVM installer SHA256: $((Get-FileHash $llvmInstaller -Algorithm SHA256).Hash)"
+            $llvm = Join-Path $root 'llvm'
+            $seven = Get-Command 7z.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            $sevenPath = if ($seven) { $seven.Source } else { 'C:\Program Files\7-Zip\7z.exe' }
+            if (-not (Test-Path $sevenPath)) { throw '7-Zip is required for LLVM extraction.' }
+            & $sevenPath x $llvmInstaller "-o$llvm" -y | Out-Null
+            Assert-NativeExit 'LLVM extraction'
+            $clang = Join-Path $llvm 'bin\clang.exe'
+            if (-not (Test-Path $clang)) { throw 'Clang executable not found in extracted LLVM.' }
+            $env:Path = "$llvm\bin;$env:Path"
+            $env:LIBCLANG_PATH = Join-Path $llvm 'bin'
+            & $clang --version
+            Assert-NativeExit 'Clang version'
+            $vcpkg = Join-Path $root 'vcpkg'
+            $pin = '9e593bb18ea69cc5095e012465dcd675a822ed0d'
+            git init $vcpkg
+            Assert-NativeExit 'vcpkg repository init'
+            git -C $vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+            Assert-NativeExit 'vcpkg remote configuration'
+            git -C $vcpkg fetch --depth 1 origin $pin
+            Assert-NativeExit 'vcpkg pinned revision fetch'
+            git -C $vcpkg checkout --detach FETCH_HEAD
+            Assert-NativeExit 'vcpkg checkout'
+            $actual = & git -C $vcpkg rev-parse HEAD
+            Assert-NativeExit 'vcpkg revision check'
+            if ($actual -ne $pin) { throw 'Wrong vcpkg revision.' }
+            $env:VCPKG_ROOT = $vcpkg
+            $env:VCPKG_DISABLE_METRICS = '1'
+            & "$vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+            Assert-NativeExit 'vcpkg bootstrap'
+            & "$vcpkg\vcpkg.exe" version
+            Assert-NativeExit 'vcpkg version'
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'NATIVE_BOOTSTRAP_OK (tool installation only; no vcpkg libraries or application build/tests)'
+
 workflows:
   starter:
     jobs:
@@ -91,3 +184,6 @@ workflows:
       - windows-toolchain-probe:
           requires:
             - windows-diagnostic
+      - windows-native-bootstrap:
+          requires:
+            - windows-toolchain-probe
