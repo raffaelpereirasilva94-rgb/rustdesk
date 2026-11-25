@@ -1,6 +1,6 @@
 version: 2.1
 
-# Initial Windows runner smoke check only. No application build or deploy.
+# Windows runner diagnostics and staged Flutter bootstrap. No application build or deploy.
 jobs:
   windows-diagnostic:
     machine:
@@ -33,7 +33,61 @@ jobs:
             }
             Write-Host 'WINDOWS_DIAGNOSTIC_OK (not an application build or test)'
 
+
+  windows-toolchain-probe:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Inventory native toolchain and verify Flutter 3.24.5
+          command: |
+            $ErrorActionPreference = 'Stop'
+            foreach ($tool in @('rustc','cargo','rustup','python','git','cmake','ninja','clang','msbuild','vcpkg','choco')) {
+              $cmd = Get-Command $tool -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($cmd) { Write-Host "$tool : $($cmd.Source)" }
+              else { Write-Host "$tool : NOT FOUND ON PATH" }
+            }
+            rustc --version
+            if ($LASTEXITCODE -ne 0) { throw 'Rust version probe failed.' }
+            cargo --version
+            if ($LASTEXITCODE -ne 0) { throw 'Cargo version probe failed.' }
+            python --version
+            if ($LASTEXITCODE -ne 0) { throw 'Python version probe failed.' }
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path $vswhere) {
+              $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              if ($vs) {
+                Write-Host "MSVC installation: $vs"
+                foreach ($file in @('Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe','Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe')) {
+                  $path = Join-Path $vs $file
+                  Write-Host "$path : $(Test-Path $path)"
+                }
+              } else { Write-Host 'MSVC x64 component not confirmed by vswhere' }
+            } else { Write-Host 'vswhere not found' }
+            $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include'
+            if (Test-Path $sdk) { Get-ChildItem $sdk -Directory | Select-Object -ExpandProperty Name }
+            $flutterRoot = Join-Path $env:TEMP 'mr-flutter-3.24.5'
+            git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git $flutterRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Flutter checkout failed.' }
+            $patch = Join-Path (Get-Location).Path '.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff'
+            if (-not (Test-Path $patch)) { throw 'Required Flutter patch is missing.' }
+            git -C $flutterRoot apply --check $patch
+            if ($LASTEXITCODE -ne 0) { throw 'Flutter patch compatibility check failed.' }
+            $flutter = Join-Path $flutterRoot 'bin\flutter.bat'
+            $env:CI = 'true'
+            $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+            & $flutter --version
+            if ($LASTEXITCODE -ne 0) { throw 'Flutter initialization failed.' }
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'FLUTTER_BOOTSTRAP_OK (native toolchain inventory only; no application build or tests)'
+
 workflows:
   starter:
     jobs:
       - windows-diagnostic
+      - windows-toolchain-probe:
+          requires:
+            - windows-diagnostic
