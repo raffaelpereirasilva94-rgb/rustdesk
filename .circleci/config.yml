@@ -630,6 +630,12 @@ jobs:
             Assert-NativeExit 'Rust version'
             if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw "Unexpected Rust version: $rustVersion" }
             Write-Host $rustVersion
+            $linker = Join-Path (Split-Path -Parent $compiler.Source) 'link.exe'
+            if (-not (Test-Path -LiteralPath $linker -PathType Leaf)) { throw "MSVC linker missing: $linker" }
+            $env:MR_MSVC_LINKER = $linker
+            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
+            $env:Path = "$(Split-Path -Parent $linker);$env:Path"
+            Write-Host "Selected MSVC linker: $linker"
             $env:PYTHONUTF8 = '1'
             $env:MR_RELEASE_FEATURES = (Get-Content -LiteralPath '.mr-core\release-features.txt' -Raw).Trim()
             Get-Command circleci -ErrorAction Stop | Out-Null

@@ -37,9 +37,9 @@ def discover(suite):
     return atoms
 
 
-def stream(command, cwd):
+def stream(command, cwd, env=None):
     proc = subprocess.Popen(
-        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
     lines = []
@@ -64,7 +64,7 @@ def write_junit(path, suite, records, output):
     })
     for r in records:
         case = ET.SubElement(root, "testcase", {
-            "classname": clean(r["atom"]), "file": clean(r["atom"]),
+            "classname": clean(r["atom"]), "file": clean(os.path.normpath(r["atom"])),
             "name": clean(r["name"]), "time": str(r.get("time", 0)),
         })
         if r["status"] != "success":
@@ -72,7 +72,9 @@ def write_junit(path, suite, records, output):
             el.text = clean(r.get("message", r["status"]))
     ET.SubElement(root, "system-out").text = clean("\n".join(output)[-160000:])
     path.parent.mkdir(parents=True, exist_ok=True)
-    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+    # Close the report explicitly before CircleCI reads or annotates it.
+    with path.open("wb") as report:
+        ET.ElementTree(root).write(report, encoding="utf-8", xml_declaration=True)
 
 
 def problem(atom, message):
@@ -92,7 +94,22 @@ def run_rust(suite, atoms):
     else:
         command += ["-p", "clipboard"]
     command += ["--", "--format", "pretty"]
-    rc, lines = stream(command, ROOT)
+    env = os.environ.copy()
+    if os.name == "nt":
+        # CircleCI invokes the suite through Git Bash; it may prepend Git's
+        # Unix link.exe to PATH. Cargo must use the MSVC linker, not that tool.
+        linker_value = env.get("MR_MSVC_LINKER")
+        if not linker_value:
+            raise RuntimeError("MR_MSVC_LINKER is required on Windows")
+        linker = Path(linker_value)
+        if not linker.is_absolute() or not linker.is_file() or linker.name.lower() != "link.exe":
+            raise RuntimeError(f"Invalid MSVC linker: {linker}")
+        if "msvc" not in str(linker).lower() or "git" in [p.lower() for p in linker.parts]:
+            raise RuntimeError(f"Unexpected linker location: {linker}")
+        env["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = str(linker)
+        env["PATH"] = str(linker.parent) + os.pathsep + env.get("PATH", "")
+        print(f"MR_TEST_LINKER={linker}", flush=True)
+    rc, lines = stream(command, ROOT, env=env)
     records = []
     expected = 0
     summaries = 0
@@ -199,10 +216,13 @@ def main():
     if action == "discover":
         print("\n".join(known))
         return 0
-    if action != "run" or len(sys.argv) < 5:
-        raise RuntimeError("Usage: test_runner.py run SUITE JUNIT ATOM...")
+    if action != "run" or len(sys.argv) < 4:
+        raise RuntimeError("Usage: test_runner.py run SUITE JUNIT [ATOM...]")
     path = Path(sys.argv[3])
-    atoms = list(dict.fromkeys(a.replace("\\", "/").removeprefix("./") for a in sys.argv[4:]))
+    # CircleCI documents newline-separated atoms on stdin when test.atoms is
+    # omitted. This avoids Bash consuming backslashes in Windows file paths.
+    raw_atoms = sys.argv[4:] if len(sys.argv) > 4 else sys.stdin.read().splitlines()
+    atoms = list(dict.fromkeys(a.strip().replace("\\", "/").removeprefix("./") for a in raw_atoms if a.strip()))
     try:
         if not atoms or not set(atoms).issubset(known):
             raise RuntimeError(f"Unexpected or empty selected atoms: {atoms!r}")
