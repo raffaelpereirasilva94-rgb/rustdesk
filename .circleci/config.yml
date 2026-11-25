@@ -125,8 +125,15 @@ jobs:
             $installer = Join-Path $root 'rustup-init.exe'
             $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
             Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $installer
-            $checksum = (Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256").Content.Trim().Split(' ')[0]
-            if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $checksum) { throw 'rustup installer checksum mismatch.' }
+            # PowerShell 5.1 may return a byte array for the checksum response.
+            $checksumFile = Join-Path $root 'rustup-init.exe.sha256'
+            Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256" -OutFile $checksumFile
+            $checksumText = Get-Content -LiteralPath $checksumFile -Raw -Encoding ASCII
+            if ($checksumText -notmatch '^\s*([0-9a-fA-F]{64})(?:\s|$)') { throw 'Invalid Rustup SHA256 checksum response.' }
+            $checksum = $Matches[1]
+            $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            if ($actualHash -ine $checksum) { throw 'rustup installer checksum mismatch.' }
+            Write-Host 'RUSTUP_CHECKSUM_OK'
             & $installer -y --no-modify-path --profile minimal --default-host x86_64-pc-windows-msvc --default-toolchain 1.75.0
             Assert-NativeExit 'Rustup installation'
             $env:Path = "$env:CARGO_HOME\bin;$env:Path"
