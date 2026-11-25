@@ -639,7 +639,18 @@ jobs:
             foreach ($suite in @('rust core','rust clipboard')) {
               Write-Host "DOCTOR: $suite"
               circleci testsuite doctor $suite
-              if ($LASTEXITCODE -ne 0) { $failed += "doctor: $suite"; continue }
+              if ($LASTEXITCODE -ne 0) {
+                $failed += "doctor: $suite"
+                $suiteId = if ($suite -eq 'rust core') { 'rust-core' } else { 'rust-clipboard' }
+                $logDir = Join-Path '.mr-test-logs' $suiteId
+                if (Test-Path -LiteralPath $logDir) {
+                  Get-ChildItem -LiteralPath $logDir -Filter '*.log' -File | ForEach-Object {
+                    Write-Host "FULL NATIVE FAILURE LOG (last 200 lines): $($_.Name)"
+                    Get-Content -LiteralPath $_.FullName -Tail 200
+                  }
+                }
+                continue
+              }
               $dir = if ($suite -eq 'rust core') { '.mr-test-results\rust-core' } else { '.mr-test-results\rust-clipboard' }
               if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
               circleci testsuite run $suite
@@ -653,6 +664,9 @@ jobs:
       - store_artifacts:
           path: .mr-test-results
           destination: rust-test-reports
+      - store_artifacts:
+          path: .mr-test-logs
+          destination: rust-test-logs
 
 
 
@@ -788,7 +802,15 @@ jobs:
             $env:Path = "C:\mr-flutter-release\bin;$env:Path"
             Get-Command circleci -ErrorAction Stop | Out-Null
             circleci testsuite doctor "flutter tests"
-            if ($LASTEXITCODE -ne 0) { throw 'Flutter testsuite doctor failed.' }
+            if ($LASTEXITCODE -ne 0) {
+              if (Test-Path -LiteralPath '.mr-test-logs\flutter') {
+                Get-ChildItem -LiteralPath '.mr-test-logs\flutter' -Filter '*.log' -File | ForEach-Object {
+                  Write-Host "FLUTTER FAILURE LOG (last 200 lines): $($_.Name)"
+                  Get-Content -LiteralPath $_.FullName -Tail 200
+                }
+              }
+              throw 'Flutter testsuite doctor failed.'
+            }
             if (Test-Path -LiteralPath '.mr-test-results\flutter') { Remove-Item -LiteralPath '.mr-test-results\flutter' -Recurse -Force }
             circleci testsuite run "flutter tests"
             if ($LASTEXITCODE -ne 0) { throw 'Flutter testsuite run failed.' }
@@ -799,6 +821,9 @@ jobs:
       - store_artifacts:
           path: .mr-test-results
           destination: flutter-test-reports
+      - store_artifacts:
+          path: .mr-test-logs
+          destination: flutter-test-logs
 
 
 

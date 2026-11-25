@@ -202,14 +202,23 @@ def main():
     if action != "run" or len(sys.argv) < 5:
         raise RuntimeError("Usage: test_runner.py run SUITE JUNIT ATOM...")
     path = Path(sys.argv[3])
-    atoms = list(dict.fromkeys(sys.argv[4:]))
-    if not atoms or not set(atoms).issubset(known):
-        raise RuntimeError("Unexpected or empty selected atoms")
+    atoms = list(dict.fromkeys(a.replace("\\", "/").removeprefix("./") for a in sys.argv[4:]))
     try:
+        if not atoms or not set(atoms).issubset(known):
+            raise RuntimeError(f"Unexpected or empty selected atoms: {atoms!r}")
         rc, records, lines = run_flutter(atoms) if suite == "flutter" else run_rust(suite, atoms)
     except Exception as exc:
-        rc, records, lines = 1, [problem(a, str(exc)) for a in atoms], [str(exc)]
+        message = f"{type(exc).__name__}: {exc}"
+        print(message, file=sys.stderr, flush=True)
+        rc, records, lines = 1, [problem(a, message) for a in (atoms or known)], [message]
+    # Keep the complete native output outside the JUnit directory, including doctor runs.
+    logs = ROOT / ".mr-test-logs" / suite
+    logs.mkdir(parents=True, exist_ok=True)
+    log_path = logs / (path.stem + ".log")
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     write_junit(path, suite, records, lines)
+    if rc:
+        print(f"MR_TEST_FAILURE: suite={suite}; exit={rc}; full_log={log_path}", file=sys.stderr, flush=True)
     print(f"MR_TEST_REPORT: {suite}; records={len(records)}; exit={rc}; junit={path}", flush=True)
     return rc
 
