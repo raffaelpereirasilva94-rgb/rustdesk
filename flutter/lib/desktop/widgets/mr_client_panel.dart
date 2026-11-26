@@ -17,7 +17,8 @@ bool get useMrClientLayout =>
     isWindows && (bind.isIncomingOnly() ||
         (mrClientPreview && !bind.isOutgoingOnly()));
 
-const mrClientWindowSize = Size(420, 620);
+// Compact Windows client window; logical pixels follow display scaling.
+const mrClientWindowSize = Size(290, 500);
 const _background = Color(0xFF11161F);
 const _card = Color(0xFF181E28);
 const _border = Color(0xFF485366);
@@ -211,7 +212,7 @@ class MrClientPanel extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 );
@@ -249,13 +250,13 @@ class _Brand extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.memory(_logo, width: 88, height: 88, fit: BoxFit.contain,
+            Image.memory(_logo, width: 76, height: 76, fit: BoxFit.contain,
                 semanticLabel: 'MR Automação Comercial'),
-            const SizedBox(width: 20),
+            const SizedBox(width: 12),
             Container(width: 1.4, height: 47, color: _blue),
-            const SizedBox(width: 20),
+            const SizedBox(width: 12),
             const Text('MR Remote',
-                style: TextStyle(color: _white, fontSize: 29,
+                style: TextStyle(color: _white, fontSize: 24,
                     fontWeight: FontWeight.w700, letterSpacing: -.4)),
           ],
         ),
@@ -327,7 +328,7 @@ class _CredentialCard extends StatelessWidget {
           const SizedBox(width: 10),
           Container(width: 1, height: 48, color: _border),
           SizedBox(
-            width: 85,
+            width: 72,
             child: Tooltip(
               message: action,
               child: InkWell(

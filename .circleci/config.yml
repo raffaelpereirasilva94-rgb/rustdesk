@@ -1849,11 +1849,20 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect changed files.' }
             $blocked = @($changes | Where-Object {
               $_ -cne '.circleci/config.yml' -and
+              $_ -cne 'flutter/lib/main.dart' -and
               $_ -cnotmatch '^flutter/lib/(desktop/|common/widgets/)[A-Za-z0-9_./-]+\.dart$'
             })
             if ($blocked.Count -gt 0) {
               $blocked | ForEach-Object { Write-Host "BLOCKED_PREVIEW_PATH=$_" }
               throw 'Changes outside visual preview scope. Use full release-candidate workflow.'
+            }
+            # Only the reviewed main.dart window-startup change is allowed.
+            # Any further change to this entry point requires a fresh review.
+            if ($changes -ccontains 'flutter/lib/main.dart') {
+              $mainBlob = git rev-parse 'HEAD:flutter/lib/main.dart'
+              if ($LASTEXITCODE -ne 0 -or $mainBlob -cne 'b1a20afc8c79d8adb2314b7c975fa4d06a89e9d5') {
+                throw 'Unreviewed main.dart change. Use full release-candidate workflow.'
+              }
             }
             foreach ($file in @($changes | Where-Object { $_ -cne '.circleci/config.yml' })) {
               $entry = @(git ls-tree HEAD -- $file)

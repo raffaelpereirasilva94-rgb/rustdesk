@@ -19,6 +19,30 @@ class DesktopTabPage extends StatefulWidget {
   @override
   State<DesktopTabPage> createState() => _DesktopTabPageState();
 
+  static bool get usesMrClientWindow => useMrClientLayout;
+
+  // Called before the native main window is shown, after restoring its position.
+  // Do not let the generic desktop startup re-enable resizing afterwards.
+  static Future<void> prepareMrClientWindow() async {
+    if (!usesMrClientWindow) return;
+    await applyMrClientWindowMode(home: true);
+  }
+
+  static Future<void> applyMrClientWindowMode({required bool home}) async {
+    if (home) {
+      if (await windowManager.isMaximized()) {
+        await windowManager.unmaximize();
+      }
+      await windowManager.setMaximizable(false);
+      await windowManager.setResizable(false);
+      await windowManager.setSize(mrClientWindowSize);
+    } else {
+      await windowManager.setResizable(true);
+      await windowManager.setMaximizable(true);
+      await windowManager.setSize(getIncomingOnlySettingsSize());
+    }
+  }
+
   static void onAddSetting(
       {SettingsTabKey initialPage = SettingsTabKey.general}) {
     try {
@@ -32,6 +56,11 @@ class DesktopTabPage extends StatefulWidget {
             key: const ValueKey(kTabLabelSettingPage),
             initialTabkey: initialPage,
           )));
+      // add() suppresses onSelected for unrestricted desktop builds.
+      // The internal client preview still needs the same expanded window.
+      if (usesMrClientWindow && !bind.isIncomingOnly()) {
+        tabController.onSelected?.call(kTabLabelSettingPage);
+      }
     } catch (e) {
       debugPrintStack(label: '$e');
     }
@@ -53,15 +82,13 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
         page: DesktopHomePage(
           key: const ValueKey(kTabLabelHomePage),
         )));
-    if (bind.isIncomingOnly() || useMrClientLayout) {
+    if (useMrClientLayout) {
+      tabController.onSelected = (_) => _queueMrClientWindowMode();
+    } else if (bind.isIncomingOnly()) {
       tabController.onSelected = (key) {
         if (key == kTabLabelHomePage) {
-          if (useMrClientLayout) {
-            _sizeMrClientHome();
-          } else {
-            windowManager.setSize(getIncomingOnlyHomeSize());
-            setResizable(false);
-          }
+          windowManager.setSize(getIncomingOnlyHomeSize());
+          setResizable(false);
         } else {
           windowManager.setSize(getIncomingOnlySettingsSize());
           setResizable(true);
@@ -70,26 +97,17 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
     }
   }
 
-  Future<void> _sizeMrClientHome() async {
-    if (!mounted || !useMrClientLayout || !isInHomePage()) return;
-    await windowManager.setSize(mrClientWindowSize);
-    if (mounted && isInHomePage()) {
-      // The unrestricted development preview remains resizable.
-      setResizable(!bind.isIncomingOnly());
-    }
-  }
+  Future<void> _windowModeQueue = Future<void>.value();
 
-  @override
-  void initState() {
-    super.initState();
-    if (useMrClientLayout) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _sizeMrClientHome();
-        // The initial native window restore may complete after the first frame.
-        Future.delayed(const Duration(milliseconds: 600), _sizeMrClientHome);
-      });
-    }
-    // HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+  // Serialize native operations so rapid tab switches cannot leave the
+  // compact window with the expanded tab's resize/maximize permissions.
+  void _queueMrClientWindowMode() {
+    _windowModeQueue = _windowModeQueue.then((_) async {
+      if (!mounted || !useMrClientLayout) return;
+      await DesktopTabPage.applyMrClientWindowMode(home: isInHomePage());
+    }).catchError((Object error, StackTrace stack) {
+      debugPrint('MR Client window mode: $error');
+    });
   }
 
   /*
@@ -138,8 +156,12 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
         ? tabWidget
         : Obx(
             () => DragToResizeArea(
-              resizeEdgeSize: stateGlobal.resizeEdgeSize.value,
-              enableResizeEdges: windowManagerEnableResizeEdges,
+              resizeEdgeSize: useMrClientLayout && isInHomePage()
+                  ? 0.0
+                  : stateGlobal.resizeEdgeSize.value,
+              enableResizeEdges: useMrClientLayout && isInHomePage()
+                  ? const <ResizeEdge>[]
+                  : windowManagerEnableResizeEdges,
               child: tabWidget,
             ),
           );
