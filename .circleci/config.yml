@@ -725,6 +725,8 @@ jobs:
               if ('<< parameters.mr_client_preview >>' -eq 'true') {
                 & $flutter build windows --release --no-pub --dart-define=MR_CLIENT_PREVIEW=true
               } elseif ('<< parameters.mr_technician_preview >>' -eq 'true') {
+                & $flutter test --no-pub test/mr_technician_chrome_test.dart
+                Assert-NativeExit 'MRDesk targeted UI tests'
                 & $flutter build windows --release --no-pub --dart-define=MR_TECHNICIAN_PREVIEW=true
               } else {
                 & $flutter build windows --release --no-pub
@@ -1855,6 +1857,7 @@ jobs:
             $blocked = @($changes | Where-Object {
               $_ -cne '.circleci/config.yml' -and
               $_ -cne 'flutter/lib/main.dart' -and
+              $_ -cne 'flutter/test/mr_technician_chrome_test.dart' -and
               $_ -cnotmatch '^flutter/lib/(desktop/|common/widgets/)[A-Za-z0-9_./-]+\.dart$'
             })
             if ($blocked.Count -gt 0) {

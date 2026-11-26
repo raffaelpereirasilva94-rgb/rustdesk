@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
 import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
@@ -40,6 +41,8 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   final _svcStopped = Get.find<RxBool>(tag: 'stop-service');
   final _svcIsUsingPublicServer = true.obs;
   Timer? _updateTimer;
+  final _mrStatusNum = Rxn<int>();
+  bool _mrStatusPending = false;
 
   double get em => 14.0;
   double? get height => bind.isIncomingOnly() ? null : em * 3;
@@ -69,7 +72,13 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.mrClientLayout || widget.mrTechnicianLayout) {
+    if (widget.mrTechnicianLayout) {
+      return Obx(() => MrDeskServerIndicator(
+        status: mrDeskServerState(_mrStatusNum.value, stopped: _svcStopped.value),
+        publicServer: _svcIsUsingPublicServer.value,
+      ));
+    }
+    if (widget.mrClientLayout) {
       return Obx(() {
         final stopped = _svcStopped.value;
         final status = stateGlobal.svcStatus.value;
@@ -219,6 +228,33 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   }
 
   updateStatus() async {
+    if (widget.mrTechnicianLayout) {
+      if (_mrStatusPending) return;
+      _mrStatusPending = true;
+      try {
+        final raw = await bind.mainGetConnectStatus().timeout(const Duration(seconds: 4));
+        final status = jsonDecode(raw) as Map<String, dynamic>;
+        final value = status['status_num'];
+        if (!mounted) return;
+        _mrStatusNum.value = value is int && [-1, 0, 1].contains(value) ? value : null;
+        stateGlobal.svcStatus.value = value == 1 ? SvcStatus.ready
+            : value == 0 ? SvcStatus.connecting : SvcStatus.notReady;
+        final count = status['video_conn_count'];
+        if (count is int) stateGlobal.videoConnCount.value = count;
+        try {
+          final isPublic = await bind.mainIsUsingPublicServer().timeout(const Duration(seconds: 2));
+          if (mounted) _svcIsUsingPublicServer.value = isPublic;
+        } catch (_) {}
+      } catch (_) {
+        if (mounted) {
+          _mrStatusNum.value = null;
+          stateGlobal.svcStatus.value = SvcStatus.notReady;
+        }
+      } finally {
+        _mrStatusPending = false;
+      }
+      return;
+    }
     final status =
         jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
     final statusNum = status['status_num'] as int;

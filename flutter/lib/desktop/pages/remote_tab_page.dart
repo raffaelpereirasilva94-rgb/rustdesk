@@ -11,6 +11,7 @@ import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/desktop/widgets/material_mod_popup_menu.dart'
     as mod_menu;
@@ -500,6 +501,10 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         windowOnTop(windowId());
       }
       return jumpOk;
+    } else if (call.method == mrDeskRemoteTabsMethod) {
+      // Read-only IPC from the main window: no credentials or screen contents.
+      if (fromWindowId != kMainWindowId) return null;
+      return jsonEncode(tabController.state.value.tabs.map((e) => e.key).toList());
     } else if (call.method == kWindowEventGetRemoteList) {
       return tabController.state.value.tabs
           .map((e) => e.key)

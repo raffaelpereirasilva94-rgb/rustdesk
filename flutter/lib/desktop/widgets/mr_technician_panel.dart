@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
@@ -6,6 +8,8 @@ import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
+import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -38,6 +42,12 @@ class MrTechnicianPanel extends StatefulWidget {
 
 class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListener {
   final _id = IDTextEditingController();
+  final _idFocus = FocusNode();
+  final _drafts = <String>[''];
+  int _draftIndex = 0;
+  List<MrDeskSession> _sessions = [];
+  bool _readingSessions = false;
+  Timer? _sessionTimer;
   late final _recent = gFFI.recentPeersModel;
   late final _favorites = gFFI.favoritePeersModel;
   late final _lan = gFFI.lanPeersModel;
@@ -63,9 +73,12 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     _favorites.addListener(_refreshFavorites);
     Get.put<IDTextEditingController>(_id);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _reload();
+      if (mounted) { _reload(); _refreshSessions(); }
     });
     _timer = Timer.periodic(const Duration(seconds: 6), (_) => _poll());
+    _sessionTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (_active && isInHomePage()) _refreshSessions();
+    });
   }
   void _reload() {
     if (_visible(0)) bind.mainLoadRecentPeers();
@@ -110,7 +123,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   @override
   void onWindowFocus() {
     _active = true;
-    if (mounted && isInHomePage()) _reload();
+    if (mounted && isInHomePage()) { _reload(); _refreshSessions(); }
   }
   @override
   void onWindowBlur() { _active = false; }
@@ -119,6 +132,8 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   @override
   void dispose() {
     _timer?.cancel();
+    _sessionTimer?.cancel();
+    _idFocus.dispose();
     windowManager.removeListener(this);
     _favorites.removeListener(_refreshFavorites);
     if (Get.isRegistered<IDTextEditingController>() &&
@@ -128,9 +143,92 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     _id.dispose();
     super.dispose();
   }
+  // Keep independent connection drafts; opening one never closes a native session.
+  void _newDraft() {
+    setState(() {
+      _drafts[_draftIndex] = _id.text;
+      _drafts.add('');
+      _draftIndex = _drafts.length - 1;
+      _id.clear();
+    });
+    _idFocus.requestFocus();
+  }
+  void _selectDraft(int index) {
+    setState(() {
+      _drafts[_draftIndex] = _id.text;
+      _draftIndex = index;
+      _id.text = _drafts[index];
+    });
+    _idFocus.requestFocus();
+  }
+  void _closeDraft(int index) {
+    if (index == 0) return;
+    setState(() {
+      _drafts[_draftIndex] = _id.text;
+      _drafts.removeAt(index);
+      if (_draftIndex == index) {
+        _draftIndex = index - 1;
+      } else if (_draftIndex > index) {
+        _draftIndex--;
+      }
+      _id.text = _drafts[_draftIndex];
+    });
+  }
+
+  // Native remote windows remain the owners of the live sessions. The
+  // dashboard only lists and activates them through existing window IPC.
+  Future<void> _refreshSessions() async {
+    if (!mounted || _readingSessions) return;
+    _readingSessions = true;
+    try {
+      final ids = rustDeskWinManager.getActiveWindows()
+          .where((id) => id != kMainWindowId).toList();
+      final groups = await Future.wait(ids.map((windowId) async {
+        try {
+          final result = await DesktopMultiWindow.invokeMethod(
+              windowId, mrDeskRemoteTabsMethod, null)
+              .timeout(const Duration(seconds: 2));
+          if (result is! String) return <MrDeskSession>[];
+          final peers = jsonDecode(result);
+          if (peers is! List) return <MrDeskSession>[];
+          return peers.whereType<String>().where((id) => id.isNotEmpty)
+              .map((id) => MrDeskSession(windowId, id)).toList();
+        } catch (_) {
+          // Other window types do not expose remote desktop tabs.
+          return <MrDeskSession>[];
+        }
+      }));
+      final current = rustDeskWinManager.getActiveWindows();
+      final next = groups.expand((group) => group)
+          .where((session) => current.contains(session.windowId)).toList();
+      if (mounted && !mrDeskSameSessions(_sessions, next)) {
+        setState(() => _sessions = next);
+      }
+    } finally {
+      _readingSessions = false;
+    }
+  }
+  Future<void> _activateSession(MrDeskSession session) async {
+    try {
+      final ok = await DesktopMultiWindow.invokeMethod(
+          session.windowId, kWindowEventActiveSession, session.peerId)
+          .timeout(const Duration(seconds: 3));
+      if (ok != true && mounted) {
+        showToast('Sessão não está mais disponível.');
+        _refreshSessions();
+      }
+    } catch (_) {
+      if (mounted) {
+        showToast('Sessão não está mais disponível.');
+        _refreshSessions();
+      }
+    }
+  }
+
   void _connect() {
     if (bind.isIncomingOnly() || _id.id.isEmpty) return;
     FocusScope.of(context).unfocus();
+    _drafts[_draftIndex] = _id.text;
     connect(context, _id.id);
   }
   Future<void> _toggleFavorite(Peer peer) async {
@@ -179,11 +277,11 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                   Padding(padding: const EdgeInsets.all(8),
                     child: Text(widget.systemError, style: const TextStyle(color: Colors.redAccent))),
                 Padding(padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
+                  child: Center(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(mainAxisSize: MainAxisSize.min, children: [
                     if (_visible(0)) _tab(0, selected, Icons.desktop_windows_outlined, 'Sessões recentes'),
                     if (_visible(1)) _tab(1, selected, Icons.star_border_rounded, 'Favoritos'),
                     if (_visible(2)) _tab(2, selected, Icons.radar_rounded, 'Encontrados'),
-                  ]))),
+                  ])))),
                 const Divider(height: 1, color: _border, indent: 24, endIndent: 24),
                 Expanded(child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(24, 18, 24, 20),
@@ -204,82 +302,126 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
               ]);
             },
           )),
-          Container(height: 46, padding: const EdgeInsets.symmetric(horizontal: 24),
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
-            child: Row(children: [
-              Expanded(child: widget.status), const SizedBox(width: 12),
-              const Text('MR Automação Comercial', style: TextStyle(color: _white, fontSize: 13)),
-            ])),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
+            child: Align(alignment: Alignment.centerRight,
+              child: Text('MR Automação Comercial',
+                style: TextStyle(color: _white, fontSize: 12))),
+          ),
         ]),
       ),
     );
   }
   Widget _header() {
-    return Container(
-      height: 58, padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
-      child: LayoutBuilder(builder: (context, constraints) {
-        final compact = constraints.maxWidth < 750;
-        return Row(children: [
-          IconButton(tooltip: 'Configurações', onPressed: widget.onSettings,
-            icon: const Icon(Icons.menu_rounded, color: _white, size: 25)),
-          const SizedBox(width: 8),
-          GestureDetector(behavior: HitTestBehavior.opaque,
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(height: 36, child: Row(children: [
+        _chromeButton('Configurações', Icons.menu_rounded, widget.onSettings),
+        const SizedBox(width: 9),
+        const MrDeskWordmark(),
+        const SizedBox(width: 14),
+        Container(width: 1, height: 23, color: _border),
+        Expanded(child: Row(children: [
+          Flexible(child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              for (int i = 0; i < _drafts.length; i++)
+                _sessionTab(
+                  'Nova sessão',
+                  selected: i == _draftIndex,
+                  onTap: () => _selectDraft(i),
+                  onClose: i == 0 ? null : () => _closeDraft(i),
+                ),
+              for (final session in _sessions)
+                _sessionTab(formatID(session.peerId),
+                  selected: false, onTap: () => _activateSession(session)),
+              _chromeButton('Nova sessão', Icons.add_to_queue_outlined, _newDraft),
+            ]),
+          )),
+          Expanded(child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onPanStart: (_) => windowManager.startDragging(),
-            child: Row(children: [
-              Container(width: 39, height: 39, alignment: Alignment.center,
-                decoration: const BoxDecoration(color: Color(0xFF080B89), shape: BoxShape.circle),
-                child: const Text('MR', style: TextStyle(color: _white, fontWeight: FontWeight.w900, fontSize: 20))),
-              if (!compact) ...[
-                const SizedBox(width: 10),
-                const Text('MR Remote', style: TextStyle(color: _white, fontSize: 20, fontWeight: FontWeight.w700)),
-              ],
-            ])),
-          const SizedBox(width: 12),
-          Container(width: 1, height: 30, color: _border),
-          const SizedBox(width: 12),
-          Expanded(child: SizedBox(height: 40, child: TextField(
-            controller: _id, inputFormatters: [IDTextInputFormatter()],
-            autocorrect: false, enableSuggestions: false,
+            child: const SizedBox.expand(),
+          )),
+        ])),
+        if (!kUseCompatibleUiMode) ...[
+          _chromeButton('Minimizar', Icons.remove, () => windowManager.minimize()),
+          Obx(() => _chromeButton(
+            stateGlobal.isMaximized.value ? 'Restaurar' : 'Maximizar',
+            stateGlobal.isMaximized.value ? Icons.filter_none : Icons.crop_square,
+            () async {
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else {
+                await windowManager.maximize();
+              }
+            })),
+          _chromeButton('Fechar', Icons.close, () => windowManager.close()),
+        ],
+      ])),
+      Container(
+        height: 42,
+        padding: const EdgeInsets.fromLTRB(10, 2, 12, 4),
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
+        child: Row(children: [
+          SizedBox(width: 24, height: 24, child: Center(child: widget.status)),
+          const SizedBox(width: 10),
+          Expanded(child: TextField(
+            controller: _id,
+            focusNode: _idFocus,
+            inputFormatters: [IDTextInputFormatter()],
+            autocorrect: false,
+            enableSuggestions: false,
             style: const TextStyle(color: _white, fontSize: 15),
             decoration: InputDecoration(
-              hintText: compact ? 'Digite o ID' : 'Digite o ID ou endereço remoto',
-              hintStyle: const TextStyle(color: _muted, fontSize: 14),
-              prefixIcon: compact ? null : const Icon(Icons.desktop_windows_outlined, color: _muted, size: 20),
-              filled: true, fillColor: _surface,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(7), borderSide: const BorderSide(color: _border)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(7), borderSide: const BorderSide(color: _blue))),
-            onSubmitted: (_) => _connect(),
-          ))),
-          const SizedBox(width: 10),
-          SizedBox(height: 40, child: ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _id,
-            builder: (context, value, _) => ElevatedButton.icon(
-              onPressed: _id.id.isEmpty ? null : _connect,
-              icon: const Icon(Icons.arrow_forward, size: 21),
-              label: const Text('Conectar', style: TextStyle(fontWeight: FontWeight.w700)),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0659F8),
-                foregroundColor: _white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7))),
+              hintText: 'Digite o ID ou endereço remoto',
+              hintStyle: const TextStyle(color: _white, fontSize: 14),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: const BorderSide(color: _border)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: const BorderSide(color: _blue)),
+              suffixIconConstraints: const BoxConstraints.tightFor(width: 40, height: 32),
+              suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _id,
+                builder: (context, value, _) => _chromeButton(
+                  'Conectar', Icons.arrow_forward, _id.id.isEmpty ? null : _connect),
+              ),
             ),
+            onSubmitted: (_) => _connect(),
           )),
-          const SizedBox(width: 8),
-          if (!kUseCompatibleUiMode) ...[
-            IconButton(tooltip: 'Minimizar', onPressed: () => windowManager.minimize(),
-              icon: const Icon(Icons.remove, color: _white, size: 20)),
-            Obx(() => IconButton(
-              tooltip: stateGlobal.isMaximized.value ? 'Restaurar' : 'Maximizar',
-              onPressed: () async {
-                if (await windowManager.isMaximized()) {
-                  await windowManager.unmaximize();
-                } else { await windowManager.maximize(); }
-              },
-              icon: Icon(stateGlobal.isMaximized.value ? Icons.filter_none : Icons.crop_square, color: _white, size: 19))),
-            IconButton(tooltip: 'Fechar', onPressed: () => windowManager.close(),
-              icon: const Icon(Icons.close, color: _white, size: 21)),
-          ],
-        ]);
-      }),
+        ]),
+      ),
+    ]);
+  }
+  Widget _chromeButton(String label, IconData icon, VoidCallback? action) {
+    return IconButton(
+      tooltip: label, onPressed: action,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 36, height: 34),
+      icon: Icon(icon, size: 19, color: action == null ? _border : _white),
+    );
+  }
+  Widget _sessionTab(String label, {required bool selected,
+      required VoidCallback onTap, VoidCallback? onClose}) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF111A28) : Colors.transparent,
+          border: Border(bottom: BorderSide(
+            width: 2, color: selected ? _border : Colors.transparent))),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.desktop_windows_outlined, color: _white, size: 17),
+          const SizedBox(width: 7),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 125),
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _white, fontSize: 13))),
+          if (onClose != null)
+            _chromeButton('Fechar aba', Icons.close, onClose),
+        ]),
+      ),
     );
   }
   Widget _localId() {
@@ -308,7 +450,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
               icon: const Icon(Icons.info_outline, color: _white, size: 22)),
             IconButton(tooltip: 'Copiar ID', onPressed: ready ? () async {
               await Clipboard.setData(ClipboardData(text: id));
-              showToast(translate('Copied'));
+              showToast('ID copiado');
             } : null, icon: const Icon(Icons.copy_outlined, size: 22)),
           ]));
         },
@@ -337,8 +479,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
         const Padding(padding: EdgeInsets.symmetric(vertical: 20),
           child: Text('Nenhum computador nesta lista.', style: TextStyle(color: _muted)))
       else LayoutBuilder(builder: (context, constraints) {
-        final columns = ((constraints.maxWidth + 12) / 190).floor().clamp(1, 5).toInt();
-        final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
+        final width = mrDeskCardWidth(constraints.maxWidth);
         return Wrap(spacing: 12, runSpacing: 12, children: devices.map((peer) =>
           SizedBox(width: width, child: _device(peer, tab))).toList());
       }),
@@ -357,7 +498,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
           onTap: () { _id.id = peer.id; },
           child: Container(decoration: BoxDecoration(border: Border.all(color: _border), borderRadius: BorderRadius.circular(8)),
             child: Column(children: [
-              SizedBox(height: 105, child: Stack(fit: StackFit.expand, children: [
+              AspectRatio(aspectRatio: 3.3, child: Stack(fit: StackFit.expand, children: [
                 // Decorative artwork, never a captured remote screen.
                 CustomPaint(painter: _DeviceArtwork(peer.id)),
                 Positioned(top: 9, left: 10, child: Tooltip(
