@@ -8,7 +8,7 @@ parameters:
     default: false
   validation_suite:
     type: enum
-    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser]
+    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified]
     default: all
 
 # Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
@@ -879,6 +879,11 @@ jobs:
             }
             $archiveHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
             "$archiveHash *$zipName" | Set-Content -LiteralPath "$zip.sha256" -Encoding ASCII
+            $revision = git rev-parse HEAD
+            Assert-NativeExit 'Package source revision'
+            $configBlob = git rev-parse HEAD:.circleci/config.yml
+            Assert-NativeExit 'Package CI config identity'
+            @("source_commit=$revision","config_blob=$configBlob","package_sha256=$archiveHash") | Set-Content -LiteralPath (Join-Path $output 'build-provenance.txt') -Encoding ASCII
             Write-Host "PACKAGE_SHA256=$archiveHash"
             Write-Host "PACKAGE_FILES=$($manifest.Count)"
             Write-Host "PACKAGE_SIZE_MIB=$([math]::Round((Get-Item -LiteralPath $zip).Length/1MB,2))"
@@ -1719,6 +1724,100 @@ jobs:
           path: .mr-probe-results
           destination: chrome-probe
 
+  windows-verified-bridge-restore:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Verify exact previously tested source and test runner
+          command: |
+            $ErrorActionPreference = 'Stop'
+            # One-time V0.1.0 candidate path. Only config.yml may differ from
+            # the reviewed Pipeline #19 tree. All source, tests, dependencies,
+            # submodule references, build scripts and other files must match.
+            $expectedRoot = @(
+              '040000 tree 597388deb65527183d44071d1905b06b747c03e9 .cargo',
+              '100644 blob 176a458f94e0ea5272ce67c36bf30b6be9caf623 .gitattributes',
+              '040000 tree 7f9839031cd0799ecee2e0df70806cb316be0920 .github',
+              '100644 blob 07e207d892b603bffe7f2136d9cfb4ac97ad6ea6 .gitignore',
+              '100644 blob d80e69aa84a4c7f764eea191622a386878cf852d .gitmodules',
+              '100644 blob 1f41b7517837fee4e2c98b7873c607d93205102c AGENTS.md',
+              '100644 blob 56cbcae8ec016320c55a83e1e0415c1490639dc2 Cargo.lock',
+              '100644 blob 625f45d5c9c24a4e1325e7d243371b93801d9cac Cargo.toml',
+              '100644 blob 768c2520342fb4fdfbee02675601c9113fc031c1 Dockerfile',
+              '100644 blob 43c994c2d3617f947bcb5adf1933e21dabe46bb5 GEMINI.md',
+              '100644 blob 0ad25db4bd1d86c452db3f9602ccdbe172438f52 LICENCE',
+              '100644 blob 38433e0afced9361a77254f6b5499c86066dae03 README.md',
+              '040000 tree 4a85341fad02233c586aa254d3ff22fc6354d47c appimage',
+              '100755 blob 1270b739f5935f0c0801ed57fd6361250a8fd84b build.py',
+              '100644 blob 30e486a4bfab8a5c0494043e2eba13220eea6c2e build.rs',
+              '040000 tree 59a624e32e6c12a413ee8077170a6dab66570b51 docs',
+              '100755 blob bd1898e4d98141ccbdcc6e6877868058601dadbb entrypoint.sh',
+              '040000 tree 186ad8c0fd1e3ea3e4c85cf38dd0436d178c44a8 examples',
+              '040000 tree ddad04dd91dc5dca803df825eb7dc936cf2f0472 fastlane',
+              '040000 tree de264bc1af15a61ee91a211d8fe0ed79b429410f flatpak',
+              '040000 tree c6409d62bb99204cf4fc85c2f8375e11c57dc7ce flutter',
+              '040000 tree 1471273e95d64da041550eaa44d32cf59a535c56 infra',
+              '040000 tree 9aef21537e527fca11199acf6dd3da2897faf654 libs',
+              '040000 tree ecffb65c76346eb7eeb7d36c3a46677eca782017 res',
+              '040000 tree dd3953aefed35760af292ec1e2b36b910e48c32e src',
+              '100644 blob d1cd4044a123ac906d6b6b065798e4f24c87cc8d vcpkg.json'
+            )
+            $expectedCI = @(
+              '100644 blob 453e7bbe129ff4f0c48885419eb2e6cd11866e92 probe-chrome.ps1',
+              '100644 blob d58cc78965bd77992f6f61f834cb036b99d53950 probe-installer-acl.ps1',
+              '100644 blob 5f70eebe76a10bca99f95aa7f78df501a6da7a7d test-suites.yml',
+              '100644 blob 64ef094ab3374e386f85adf8de2390c6ef915610 test_runner.py'
+            )
+            $rootLines = @(git ls-tree HEAD)
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read checkout tree.' }
+            $ciLines = @(git ls-tree HEAD:.circleci)
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read CircleCI tree.' }
+            $actualRoot = @($rootLines | ForEach-Object { $_ -replace '\t',' ' } | Where-Object { $_ -notmatch ' \.circleci$' })
+            $actualCI = @($ciLines | ForEach-Object { $_ -replace '\t',' ' } | Where-Object { $_ -notmatch ' config\.yml$' })
+            if ($actualRoot.Count -ne $expectedRoot.Count -or @(Compare-Object -ReferenceObject $expectedRoot -DifferenceObject $actualRoot -CaseSensitive).Count -ne 0) {
+              throw 'Source differs from the verified V0.1.0 tree. Use the full release-candidate workflow.'
+            }
+            if ($actualCI.Count -ne $expectedCI.Count -or @(Compare-Object -ReferenceObject $expectedCI -DifferenceObject $actualCI -CaseSensitive).Count -ne 0) {
+              throw 'Test runner or other CI files changed. Use the full release-candidate workflow.'
+            }
+            $revision = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read checkout revision.' }
+            Write-Host "VERIFIED_V010_SOURCE_OK=$revision; evidence=8d7a5749f8e56f4957ab2b07d5b9e4152cd6b186"
+      - run:
+          name: Calculate source identity for generated bridge cache
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $identity = @('bridge-v1-flutter-3.22.3-codegen-1.80.1-expand-1.0.95-rust-1.75.0')
+            foreach ($path in @('src','flutter','libs','Cargo.toml','Cargo.lock','.cargo')) {
+              $object = git rev-parse "HEAD:$path"
+              if ($LASTEXITCODE -ne 0) { throw "Cannot identify bridge input $path" }
+              $identity += $object
+            }
+            $identity | Set-Content -LiteralPath '.mr-bridge-cache-key' -Encoding ASCII
+      - restore_cache:
+          keys:
+            - 'mr-bridge-v1-win-x64-{{ checksum ".mr-bridge-cache-key" }}'
+      - run:
+          name: Restore verified Bridge without native bootstrap
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $files = @('src/bridge_generated.rs','src/bridge_generated.io.rs','flutter/lib/generated_bridge.dart','flutter/lib/generated_bridge.freezed.dart','flutter/macos/Runner/bridge_generated.h','flutter/ios/Runner/bridge_generated.h')
+            foreach ($file in $files) {
+              $item = Get-Item -LiteralPath (Join-Path '.mr-bridge' $file) -ErrorAction Stop
+              if ($item.PSIsContainer -or $item.Length -le 0) { throw "Invalid cached Bridge file: $file" }
+              Write-Host "BRIDGE_FILE=$file; SHA256=$((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash)"
+            }
+            Write-Host 'VERIFIED_BRIDGE_CACHE_OK (no regeneration)'
+      - persist_to_workspace:
+          root: .mr-bridge
+          paths:
+            - src
+            - flutter
+
 workflows:
   validate:
     when:
@@ -1737,7 +1836,11 @@ workflows:
           requires:
             - windows-native-bootstrap
   release-candidate:
-    when: << pipeline.parameters.build_distribution >>
+    when:
+      and:
+        - << pipeline.parameters.build_distribution >>
+        - not:
+            equal: [package-verified, << pipeline.parameters.validation_suite >>]
     jobs:
       - windows-native-bootstrap
       - windows-rust-core-tests:
@@ -1825,3 +1928,20 @@ workflows:
         - equal: [flutter-browser, << pipeline.parameters.validation_suite >>]
     jobs:
       - windows-flutter-browser-tests
+  package-verified-v010:
+    when:
+      and:
+        - << pipeline.parameters.build_distribution >>
+        - equal: [package-verified, << pipeline.parameters.validation_suite >>]
+        - not: << pipeline.parameters.smarter_testing >>
+    jobs:
+      - windows-verified-bridge-restore
+      - windows-core-build:
+          requires:
+            - windows-verified-bridge-restore
+      - windows-flutter-build:
+          requires:
+            - windows-core-build
+      - windows-package:
+          requires:
+            - windows-flutter-build
