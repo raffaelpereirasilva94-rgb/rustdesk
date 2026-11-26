@@ -312,8 +312,9 @@ class _CredentialCard extends StatelessWidget {
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
-                      child: SelectableText(value,
+                      child: Text(value,
                           maxLines: 1,
+                          softWrap: false,
                           style: const TextStyle(
                               color: _white, fontSize: 32,
                               fontWeight: FontWeight.w700)),
