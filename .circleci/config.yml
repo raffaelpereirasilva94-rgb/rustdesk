@@ -8,7 +8,7 @@ parameters:
     default: false
   validation_suite:
     type: enum
-    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified]
+    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified, visual-preview]
     default: all
 
 # Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
@@ -1818,6 +1818,168 @@ jobs:
             - src
             - flutter
 
+  windows-visual-preview-input:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Guard visual-only changes against homologated V0.1.0
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $baseline = '5d5eb048d21fc1e9095c138117e89a5102424851'
+            $null = git cat-file -t $baseline 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              git fetch --no-tags origin $baseline
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch approved baseline.' }
+            }
+            $null = git merge-base --is-ancestor $baseline HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Checkout is not descended from approved baseline.' }
+            $changes = @(git -c core.quotepath=true diff --no-renames --name-only $baseline HEAD --)
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect changed files.' }
+            $blocked = @($changes | Where-Object {
+              $_ -cne '.circleci/config.yml' -and
+              $_ -cnotmatch '^flutter/lib/(desktop/|common/widgets/)[A-Za-z0-9_./-]+\.dart$'
+            })
+            if ($blocked.Count -gt 0) {
+              $blocked | ForEach-Object { Write-Host "BLOCKED_PREVIEW_PATH=$_" }
+              throw 'Changes outside visual preview scope. Use full release-candidate workflow.'
+            }
+            foreach ($file in @($changes | Where-Object { $_ -cne '.circleci/config.yml' })) {
+              $entry = @(git ls-tree HEAD -- $file)
+              if ($LASTEXITCODE -ne 0) { throw "Cannot verify file mode: $file" }
+              if ($entry.Count -gt 0 -and $entry[0] -notmatch '^100644 blob ') { throw "Non-regular preview file: $file" }
+            }
+            $dirty = @(git status --porcelain --untracked-files=no)
+            if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Checkout is not clean.' }
+            Write-Host "VISUAL_PREVIEW_SCOPE_OK; baseline=$baseline; changed=$($changes.Count)"
+      - run:
+          name: Calculate source identity for generated bridge cache
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $identity = @('bridge-v1-flutter-3.22.3-codegen-1.80.1-expand-1.0.95-rust-1.75.0')
+            foreach ($path in @('src','flutter','libs','Cargo.toml','Cargo.lock','.cargo')) {
+              $object = git rev-parse "5d5eb048d21fc1e9095c138117e89a5102424851:$path"
+              if ($LASTEXITCODE -ne 0) { throw "Cannot identify bridge input $path" }
+              $identity += $object
+            }
+            $identity | Set-Content -LiteralPath '.mr-bridge-cache-key' -Encoding ASCII
+      - restore_cache:
+          keys:
+            - 'mr-bridge-v1-win-x64-{{ checksum ".mr-bridge-cache-key" }}'
+      - run:
+          name: Verify cached Bridge for baseline ABI
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $files = @('src/bridge_generated.rs','src/bridge_generated.io.rs','flutter/lib/generated_bridge.dart','flutter/lib/generated_bridge.freezed.dart','flutter/macos/Runner/bridge_generated.h','flutter/ios/Runner/bridge_generated.h')
+            foreach ($file in $files) {
+              $item = Get-Item -LiteralPath (Join-Path '.mr-bridge' $file) -ErrorAction Stop
+              if ($item.PSIsContainer -or $item.Length -le 0) { throw "Invalid cached Bridge file: $file" }
+              Write-Host "BRIDGE_FILE=$file; SHA256=$((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash)"
+            }
+            Write-Host 'VISUAL_PREVIEW_BRIDGE_OK'
+      - restore_cache:
+          keys:
+            - mr-visual-core-v1-win-x64-e940b0d1165daf3782ab154d6b2ad17fc45eac7812dd87336a1a18c1e3878068-zip
+      - run:
+          name: Restore and verify approved Rust release libraries
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            $repo = (Get-Location).Path
+            $cacheDir = Join-Path $repo '.mr-visual-core-cache'
+            New-Item -ItemType Directory -Force $cacheDir | Out-Null
+            $zip = Join-Path $cacheDir 'v0.1.0.zip'
+            $expected = 'e940b0d1165daf3782ab154d6b2ad17fc45eac7812dd87336a1a18c1e3878068'
+            if (Test-Path -LiteralPath $zip -PathType Leaf) {
+              if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $expected) { Remove-Item -LiteralPath $zip -Force }
+            }
+            if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+              Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/raffaelpereirasilva94-rgb/rustdesk/releases/download/v0.1.0/MRRemote-v0.1.0-windows-x64-test-unsigned.zip' -OutFile $zip
+              Write-Host 'VISUAL_CORE_CACHE_MISS_DOWNLOADED_APPROVED_RELEASE'
+            } else { Write-Host 'VISUAL_CORE_CACHE_HIT' }
+            if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $expected) { throw 'Approved release archive SHA256 mismatch.' }
+            $extract = Join-Path $repo '.mr-visual-core-extract'
+            Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+            $out = Join-Path $repo '.mr-visual-core'
+            $mapping = @{
+              'librustdesk.dll' = 'target/release/librustdesk.dll'
+              'dylib_virtual_display.dll' = 'target/release/deps/dylib_virtual_display.dll'
+            }
+            foreach ($name in $mapping.Keys) {
+              $source = Get-Item -LiteralPath (Join-Path $extract $name) -ErrorAction Stop
+              if ($source.PSIsContainer -or $source.Length -le 0) { throw "Invalid approved DLL: $name" }
+              $destination = Join-Path $out $mapping[$name]
+              New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+              Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
+              Write-Host "APPROVED_CORE_DLL=$name; SHA256=$((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash)"
+            }
+            $features = (& python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $features -notmatch '^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$') { throw 'Cannot resolve approved feature flags.' }
+            foreach ($feature in @('flutter','hwcodec','vram')) {
+              if (($features -split ',') -notcontains $feature) { throw "Missing required feature: $feature" }
+            }
+            $features | Set-Content -LiteralPath (Join-Path $out 'release-features.txt') -Encoding ASCII
+            Write-Host 'VISUAL_PREVIEW_CORE_OK (approved release DLLs; no Rust compilation)'
+          no_output_timeout: 5m
+      - save_cache:
+          key: mr-visual-core-v1-win-x64-e940b0d1165daf3782ab154d6b2ad17fc45eac7812dd87336a1a18c1e3878068-zip
+          paths:
+            - .mr-visual-core-cache
+      - persist_to_workspace:
+          root: .mr-bridge
+          paths:
+            - src
+            - flutter
+      - persist_to_workspace:
+          root: .mr-visual-core
+          paths:
+            - target/release/librustdesk.dll
+            - target/release/deps/dylib_virtual_display.dll
+            - release-features.txt
+
+  windows-visual-preview-package:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .mr-preview-input
+      - run:
+          name: Package unsigned visual preview only
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $repo = (Get-Location).Path
+            $app = Join-Path $repo '.mr-preview-input\windows-app'
+            $out = Join-Path $repo '.mr-preview-output'
+            New-Item -ItemType Directory -Force $out | Out-Null
+            $revision = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify preview revision.' }
+            foreach ($file in @('rustdesk.exe','librustdesk.dll','dylib_virtual_display.dll','flutter_windows.dll','data\app.so','data\icudtl.dat')) {
+              $item = Get-Item -LiteralPath (Join-Path $app $file) -ErrorAction Stop
+              if ($item.PSIsContainer -or $item.Length -le 0) { throw "Missing preview file: $file" }
+            }
+            foreach ($name in @('librustdesk.dll','dylib_virtual_display.dll')) {
+              $relative = if ($name -eq 'librustdesk.dll') { 'target/release/librustdesk.dll' } else { 'target/release/deps/dylib_virtual_display.dll' }
+              $original = Join-Path (Join-Path $repo '.mr-preview-input') $relative
+              if ((Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $app $name) -Algorithm SHA256).Hash) { throw "Preview DLL mismatch: $name" }
+            }
+            $zipName = 'MRRemote-v0.2-visual-preview-windows-x64-unsigned.zip'
+            $zip = Join-Path $out $zipName
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::CreateFromDirectory($app,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+            $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash *$zipName" | Set-Content -LiteralPath "$zip.sha256" -Encoding ASCII
+            @("preview_commit=$revision","core_commit=5d5eb048d21fc1e9095c138117e89a5102424851","core_release_sha256=e940b0d1165daf3782ab154d6b2ad17fc45eac7812dd87336a1a18c1e3878068","preview_sha256=$hash","scope=visual preview only; supplemental drivers omitted; not a release or test approval") | Set-Content -LiteralPath (Join-Path $out 'preview-provenance.txt') -Encoding ASCII
+            Write-Host 'VISUAL_PREVIEW_PACKAGE_OK (unsigned UI preview; not a release)'
+      - store_artifacts:
+          path: .mr-preview-output
+          destination: mr-remote-visual-preview
+
 workflows:
   validate:
     when:
@@ -1943,5 +2105,19 @@ workflows:
           requires:
             - windows-core-build
       - windows-package:
+          requires:
+            - windows-flutter-build
+  visual-preview-v020:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - not: << pipeline.parameters.smarter_testing >>
+        - equal: [visual-preview, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-visual-preview-input
+      - windows-flutter-build:
+          requires:
+            - windows-visual-preview-input
+      - windows-visual-preview-package:
           requires:
             - windows-flutter-build
