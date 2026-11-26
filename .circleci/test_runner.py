@@ -181,7 +181,10 @@ def run_flutter(atoms):
         if not selected:
             continue
         print(f"MR_FLUTTER_PLATFORM={platform}; files={len(selected)}", flush=True)
-        command = [tool, "test", "--platform", platform, "--machine", "--timeout", "60s", "--no-pub"]
+        command = [tool, "test", "--machine", "--timeout", "60s", "--no-pub"]
+        # Flutter 3.24.5 calls its VM backend "tester", not "vm".
+        if platform == "chrome":
+            command += ["--platform", "chrome"]
         command += [a.removeprefix("flutter/") for a in selected]
         try:
             env = os.environ.copy()
