@@ -236,6 +236,7 @@ typedef LabelGetter = Rx<String> Function(String key);
 int _lastClickTime = 0;
 
 class DesktopTab extends StatefulWidget {
+  final Widget? mainHomeHeader;
   final bool showLogo;
   final bool showTitle;
   final bool showMinimize;
@@ -262,6 +263,7 @@ class DesktopTab extends StatefulWidget {
   DesktopTab({
     Key? key,
     required this.controller,
+    this.mainHomeHeader,
     this.showLogo = true,
     this.showTitle = false,
     this.showMinimize = true,
@@ -522,6 +524,13 @@ class _DesktopTabState extends State<DesktopTab>
   Widget build(BuildContext context) {
     return Column(children: [
       Obx(() {
+        if (widget.mainHomeHeader != null &&
+            tabType == DesktopTabType.main &&
+            state.value.selected == 0 &&
+            stateGlobal.showTabBar.isTrue &&
+            !kUseCompatibleUiMode) {
+          return widget.mainHomeHeader!;
+        }
         if (stateGlobal.showTabBar.isTrue &&
             !(kUseCompatibleUiMode && isHideSingleItem())) {
           final showBottomDivider = _showTabBarBottomDivider(tabType);

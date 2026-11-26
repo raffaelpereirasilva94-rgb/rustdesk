@@ -8,7 +8,7 @@ parameters:
     default: false
   validation_suite:
     type: enum
-    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified, visual-preview]
+    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified, visual-preview, client-preview]
     default: all
 
 # Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
@@ -627,6 +627,10 @@ jobs:
           destination: rust-core-artifact
 
   windows-flutter-build:
+    parameters:
+      mr_client_preview:
+        type: boolean
+        default: false
     machine:
       image: windows-server-2022-gui:current
       shell: powershell.exe -ExecutionPolicy Bypass
@@ -715,7 +719,11 @@ jobs:
             try {
               & $flutter pub get
               Assert-NativeExit 'Flutter release dependencies'
-              & $flutter build windows --release --no-pub
+              if ('<< parameters.mr_client_preview >>' -eq 'true') {
+                & $flutter build windows --release --no-pub --dart-define=MR_CLIENT_PREVIEW=true
+              } else {
+                & $flutter build windows --release --no-pub
+              }
               Assert-NativeExit 'Flutter Windows release build'
             } finally { Pop-Location }
             $release = Join-Path $repo 'flutter\build\windows\x64\runner\Release'
@@ -1968,7 +1976,11 @@ jobs:
               $original = Join-Path (Join-Path $repo '.mr-preview-input') $relative
               if ((Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $app $name) -Algorithm SHA256).Hash) { throw "Preview DLL mismatch: $name" }
             }
-            $zipName = 'MRRemote-v0.2-visual-preview-windows-x64-unsigned.zip'
+            $zipName = if ('<< pipeline.parameters.validation_suite >>' -eq 'client-preview') {
+              'MRRemote-v0.2-client-preview-windows-x64-unsigned.zip'
+            } else {
+              'MRRemote-v0.2-visual-preview-windows-x64-unsigned.zip'
+            }
             $zip = Join-Path $out $zipName
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             [IO.Compression.ZipFile]::CreateFromDirectory($app,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
@@ -2116,6 +2128,21 @@ workflows:
     jobs:
       - windows-visual-preview-input
       - windows-flutter-build:
+          requires:
+            - windows-visual-preview-input
+      - windows-visual-preview-package:
+          requires:
+            - windows-flutter-build
+  client-preview-v020:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - not: << pipeline.parameters.smarter_testing >>
+        - equal: [client-preview, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-visual-preview-input
+      - windows-flutter-build:
+          mr_client_preview: true
           requires:
             - windows-visual-preview-input
       - windows-visual-preview-package:

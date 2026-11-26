@@ -3,6 +3,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -52,11 +53,15 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
         page: DesktopHomePage(
           key: const ValueKey(kTabLabelHomePage),
         )));
-    if (bind.isIncomingOnly()) {
+    if (bind.isIncomingOnly() || useMrClientLayout) {
       tabController.onSelected = (key) {
         if (key == kTabLabelHomePage) {
-          windowManager.setSize(getIncomingOnlyHomeSize());
-          setResizable(false);
+          if (useMrClientLayout) {
+            _sizeMrClientHome();
+          } else {
+            windowManager.setSize(getIncomingOnlyHomeSize());
+            setResizable(false);
+          }
         } else {
           windowManager.setSize(getIncomingOnlySettingsSize());
           setResizable(true);
@@ -65,9 +70,25 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
     }
   }
 
+  Future<void> _sizeMrClientHome() async {
+    if (!mounted || !useMrClientLayout || !isInHomePage()) return;
+    await windowManager.setSize(mrClientWindowSize);
+    if (mounted && isInHomePage()) {
+      // The unrestricted development preview remains resizable.
+      setResizable(!bind.isIncomingOnly());
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    if (useMrClientLayout) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _sizeMrClientHome();
+        // The initial native window restore may complete after the first frame.
+        Future.delayed(const Duration(milliseconds: 600), _sizeMrClientHome);
+      });
+    }
     // HardwareKeyboard.instance.addHandler(_handleKeyEvent);
   }
 
@@ -96,6 +117,13 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
             backgroundColor: Theme.of(context).colorScheme.background,
             body: DesktopTab(
               controller: tabController,
+              mainHomeHeader: useMrClientLayout
+                  ? MrClientHeader(
+                      onSettings: bind.isDisableSettings()
+                          ? null
+                          : () => DesktopTabPage.onAddSetting(),
+                    )
+                  : null,
               tail: Offstage(
                 offstage: bind.isIncomingOnly() || bind.isDisableSettings(),
                 child: ActionIcon(

@@ -22,10 +22,12 @@ import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 
 class OnlineStatusWidget extends StatefulWidget {
-  const OnlineStatusWidget({Key? key, this.onSvcStatusChanged})
+  const OnlineStatusWidget(
+      {Key? key, this.onSvcStatusChanged, this.mrClientLayout = false})
       : super(key: key);
 
   final VoidCallback? onSvcStatusChanged;
+  final bool mrClientLayout;
 
   @override
   State<OnlineStatusWidget> createState() => _OnlineStatusWidgetState();
@@ -65,6 +67,53 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.mrClientLayout) {
+      return Obx(() {
+        final stopped = _svcStopped.value;
+        final status = stateGlobal.svcStatus.value;
+        final ready = !stopped && status == SvcStatus.ready;
+        final connecting = !stopped && status == SvcStatus.connecting;
+        final publicServer = ready && _svcIsUsingPublicServer.value;
+        final color = ready && !publicServer
+            ? const Color(0xFF00E548)
+            : connecting || publicServer
+                ? const Color(0xFFFFC857)
+                : const Color(0xFFF87171);
+        final label = stopped
+            ? 'Serviço parado'
+            : publicServer
+                ? 'Servidor público'
+                : ready
+                    ? 'Pronto para conectar'
+                    : connecting
+                        ? 'Conectando...'
+                        : 'Servidor indisponível';
+        return Row(
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: Color(0xFFF8FAFC),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+            ),
+            if (stopped)
+              TextButton(
+                onPressed: () async { await start_service(true); },
+                child: const Text('Iniciar'),
+              ),
+          ],
+        );
+      });
+    }
     final isIncomingOnly = bind.isIncomingOnly();
     startServiceWidget() => Offstage(
           offstage: !_svcStopped.value,
