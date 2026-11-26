@@ -78,15 +78,65 @@ class MrDeskWordmark extends StatelessWidget {
   const MrDeskWordmark({super.key});
   @override
   Widget build(BuildContext context) {
-    return const Text.rich(
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Text.rich(
       TextSpan(children: [
-        TextSpan(text: 'MR', style: TextStyle(color: Color(0xFF5B7FE5))),
-        TextSpan(text: 'Desk', style: TextStyle(color: Color(0xFFFCFCFC))),
+        const TextSpan(text: 'MR', style: TextStyle(color: Color(0xFF5B7FE5))),
+        TextSpan(text: 'Desk', style: TextStyle(color: dark
+            ? const Color(0xFFFCFCFC) : const Color(0xFF172033))),
       ]),
-      style: TextStyle(fontFamily: 'Segoe UI', fontSize: 16,
+      style: const TextStyle(fontFamily: 'Inter', fontSize: 16,
         fontWeight: FontWeight.w500, letterSpacing: -0.3),
       maxLines: 1,
       softWrap: false,
+    );
+  }
+}
+
+// Keep the existing dark identity and provide a matching readable light palette.
+class MrDeskTechnicianPalette {
+  const MrDeskTechnicianPalette(this.dark);
+  final bool dark;
+  Color get background => dark ? const Color(0xFF0E1421) : const Color(0xFFF6F8FC);
+  Color get surface => dark ? const Color(0xFF192334) : Colors.white;
+  Color get border => dark ? const Color(0xFF53657A) : const Color(0xFFB8C4D6);
+  Color get foreground => dark ? const Color(0xFFF8FAFC) : const Color(0xFF172033);
+  Color get muted => dark ? const Color(0xFFB5C9E0) : const Color(0xFF52647B);
+  Color get selected => dark ? const Color(0xFF111A28) : const Color(0xFFE5EBFA);
+}
+
+class MrDeskLocalId extends StatelessWidget {
+  const MrDeskLocalId({super.key, required this.id, required this.onInfo, this.onCopy});
+  final String id;
+  final VoidCallback onInfo;
+  final VoidCallback? onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = MrDeskTechnicianPalette(
+        Theme.of(context).brightness == Brightness.dark);
+    return Container(
+      height: 96,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(width: 160, child: Text('Seu Dispositivo',
+            textAlign: TextAlign.right,
+            style: TextStyle(color: palette.foreground, fontSize: 16))),
+          const SizedBox(width: 20),
+          Text(id, style: const TextStyle(color: Color(0xFF5B7FE5),
+              fontSize: 46, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 20),
+          SizedBox(width: 160, child: Row(children: [
+            IconButton(tooltip: 'Informações do ID', onPressed: onInfo,
+                icon: Icon(Icons.info_outline, color: palette.foreground, size: 22)),
+            IconButton(tooltip: 'Copiar ID', onPressed: onCopy,
+                icon: const Icon(Icons.copy_outlined, size: 22)),
+          ])),
+        ]),
+      ),
     );
   }
 }

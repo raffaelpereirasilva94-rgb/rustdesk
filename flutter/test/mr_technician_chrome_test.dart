@@ -39,17 +39,49 @@ void main() {
     expect(mrDeskSameSessions(first, const []), isFalse);
   });
   testWidgets('wordmark matches approved typography and colors', (tester) async {
-    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: MrDeskWordmark())));
+    await tester.pumpWidget(MaterialApp(theme: ThemeData.dark(), home: const Scaffold(body: MrDeskWordmark())));
     final text = tester.widget<Text>(find.descendant(
       of: find.byType(MrDeskWordmark), matching: find.byType(Text)));
     final span = text.textSpan as TextSpan;
     expect(span.toPlainText(), 'MRDesk');
     expect(text.style!.fontSize, 16);
-    expect(text.style!.fontFamily, 'Segoe UI');
+    expect(text.style!.fontFamily, 'Inter');
     expect(text.style!.fontWeight, FontWeight.w500);
     expect(text.style!.letterSpacing, -0.3);
     expect((span.children![0] as TextSpan).style!.color, const Color(0xFF5B7FE5));
     expect((span.children![1] as TextSpan).style!.color, const Color(0xFFFCFCFC));
+  });
+  testWidgets('wordmark and technician palette follow light and dark themes', (tester) async {
+    for (final brightness in Brightness.values) {
+      final dark = brightness == Brightness.dark;
+      await tester.pumpWidget(MaterialApp(
+        theme: ThemeData(brightness: brightness),
+        home: const Scaffold(body: MrDeskWordmark()),
+      ));
+      final text = tester.widget<Text>(find.descendant(
+        of: find.byType(MrDeskWordmark), matching: find.byType(Text)));
+      final span = text.textSpan as TextSpan;
+      expect((span.children![1] as TextSpan).style!.color,
+          dark ? const Color(0xFFFCFCFC) : const Color(0xFF172033));
+      final palette = MrDeskTechnicianPalette(dark);
+      expect(palette.background, dark ? const Color(0xFF0E1421) : const Color(0xFFF6F8FC));
+      expect(palette.foreground, dark ? const Color(0xFFF8FAFC) : const Color(0xFF172033));
+    }
+  });
+  testWidgets('device ID is centered, highlighted and copy remains available', (tester) async {
+    var copied = false;
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: MrDeskLocalId(
+      id: '128 118 149', onInfo: () {}, onCopy: () => copied = true,
+    ))));
+    final id = find.text('128 118 149');
+    expect(find.text('Seu Dispositivo'), findsOneWidget);
+    expect(find.text('Seu ID de atendimento'), findsNothing);
+    final style = tester.widget<Text>(id).style!;
+    expect(style.color, const Color(0xFF5B7FE5));
+    expect(style.fontSize, 46);
+    expect(tester.getCenter(id).dx, closeTo(tester.getCenter(find.byType(MrDeskLocalId)).dx, 1));
+    await tester.tap(find.byTooltip('Copiar ID'));
+    expect(copied, isTrue);
   });
   testWidgets('only ready status displays a check', (tester) async {
     for (final status in MrDeskServerState.values) {

@@ -126,7 +126,7 @@ class MrClientPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final model = gFFI.serverModel;
     return Theme(
-      data: ThemeData.dark().copyWith(
+      data: ThemeData(brightness: Brightness.dark, fontFamily: 'Inter').copyWith(
         colorScheme: const ColorScheme.dark(primary: _blue, surface: _card),
         scaffoldBackgroundColor: _background,
       ),

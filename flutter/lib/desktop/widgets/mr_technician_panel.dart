@@ -22,11 +22,6 @@ const mrTechnicianPreview = bool.fromEnvironment('MR_TECHNICIAN_PREVIEW');
 bool get useMrTechnicianLayout => isWindows && mrTechnicianPreview &&
     !useMrClientLayout && !bind.isIncomingOnly();
 
-const _bg = Color(0xFF0E1421);
-const _surface = Color(0xFF192334);
-const _border = Color(0xFF53657A);
-const _white = Color(0xFFF8FAFC);
-const _muted = Color(0xFFB5C9E0);
 const _blue = Color(0xFF1688FF);
 const _green = Color(0xFF19E53C);
 
@@ -41,6 +36,14 @@ class MrTechnicianPanel extends StatefulWidget {
 }
 
 class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListener {
+  MrDeskTechnicianPalette get _palette => MrDeskTechnicianPalette(
+      Theme.of(context).brightness == Brightness.dark);
+  Color get _bg => _palette.background;
+  Color get _surface => _palette.surface;
+  Color get _border => _palette.border;
+  Color get _white => _palette.foreground;
+  Color get _muted => _palette.muted;
+
   final _id = IDTextEditingController();
   final _idFocus = FocusNode();
   final _drafts = MrDeskDrafts();
@@ -235,10 +238,12 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Theme(
-      data: ThemeData.dark().copyWith(
-        colorScheme: const ColorScheme.dark(primary: _blue, surface: _surface),
+      data: theme.copyWith(
+        colorScheme: theme.colorScheme.copyWith(primary: _blue, surface: _surface),
         scaffoldBackgroundColor: _bg,
+        inputDecorationTheme: theme.inputDecorationTheme.copyWith(filled: false),
       ),
       child: Material(
         color: _bg,
@@ -262,7 +267,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                     if (_visible(1)) _tab(1, selected, Icons.star_border_rounded, 'Favoritos'),
                     if (_visible(2)) _tab(2, selected, Icons.radar_rounded, 'Encontrados'),
                   ])))),
-                const Divider(height: 1, color: _border, indent: 24, endIndent: 24),
+                Divider(height: 1, color: _border, indent: 24, endIndent: 24),
                 Expanded(child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(24, 18, 24, 20),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -270,7 +275,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                       _section(Icons.desktop_windows_outlined, 'Sessões recentes', _recent.peers, PeerTabIndex.recent),
                       if (_visible(2)) ...[
                         const SizedBox(height: 20),
-                        const Divider(height: 1, color: _border),
+                        Divider(height: 1, color: _border),
                         const SizedBox(height: 15),
                         _section(Icons.radar_rounded, 'Encontrados', _lan.peers, PeerTabIndex.lan),
                       ],
@@ -282,8 +287,8 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
               ]);
             },
           )),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
             child: Align(alignment: Alignment.centerRight,
               child: Text('MR Automação Comercial',
                 style: TextStyle(color: _white, fontSize: 12))),
@@ -363,7 +368,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
       Container(
         height: 42,
         padding: const EdgeInsets.fromLTRB(10, 2, 12, 4),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
         child: Row(children: [
           SizedBox(width: 24, height: 24, child: Center(child: widget.status)),
           const SizedBox(width: 10),
@@ -373,13 +378,13 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
             inputFormatters: [IDTextInputFormatter()],
             autocorrect: false,
             enableSuggestions: false,
-            style: const TextStyle(color: _white, fontSize: 15),
+            style: TextStyle(color: _white, fontSize: 15),
             decoration: InputDecoration(
               hintText: 'Digite o ID ou endereço remoto',
-              hintStyle: const TextStyle(color: _white, fontSize: 14),
+              hintStyle: TextStyle(color: _white, fontSize: 14),
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: const BorderSide(color: _border)),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: BorderSide(color: _border)),
               focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: const BorderSide(color: _blue)),
               suffixIconConstraints: const BoxConstraints.tightFor(width: 40, height: 32),
               suffixIcon: ValueListenableBuilder<TextEditingValue>(
@@ -410,16 +415,16 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
         height: 36,
         padding: const EdgeInsets.symmetric(horizontal: 9),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF111A28) : Colors.transparent,
+          color: selected ? _palette.selected : Colors.transparent,
           border: Border(bottom: BorderSide(
             width: 2, color: selected ? _border : Colors.transparent))),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.desktop_windows_outlined, color: _white, size: 17),
+          Icon(Icons.desktop_windows_outlined, color: _white, size: 17),
           const SizedBox(width: 7),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 125),
             child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: _white, fontSize: 13))),
+              style: TextStyle(color: _white, fontSize: 13))),
           if (onClose != null)
             _chromeButton('Fechar aba', Icons.close, onClose),
         ]),
@@ -428,35 +433,28 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   }
   Widget _localId() {
     final controller = gFFI.serverModel.serverId;
-    return Container(height: 76, alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: ValueListenableBuilder<TextEditingValue>(
-        valueListenable: controller,
-        builder: (context, value, _) {
-          final id = value.text;
-          final ready = id.isNotEmpty && id != translate('Generating ...');
-          return FittedBox(fit: BoxFit.scaleDown, child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Text('Seu ID de atendimento', style: TextStyle(color: _white, fontSize: 16)),
-            const SizedBox(width: 20),
-            Container(width: 1, height: 27, color: _border),
-            const SizedBox(width: 20),
-            Text(ready ? formatID(id) : 'Gerando...', style: const TextStyle(color: _white, fontSize: 32, fontWeight: FontWeight.w700)),
-            const SizedBox(width: 14),
-            IconButton(tooltip: 'Informações do ID', onPressed: () => showDialog<void>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('ID de atendimento'),
-                content: const Text('Identificação deste computador no servidor remoto. O acesso depende das permissões e da autorização configuradas.'),
-                actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Fechar'))],
-              )),
-              icon: const Icon(Icons.info_outline, color: _white, size: 22)),
-            IconButton(tooltip: 'Copiar ID', onPressed: ready ? () async {
-              await Clipboard.setData(ClipboardData(text: id));
-              showToast('ID copiado');
-            } : null, icon: const Icon(Icons.copy_outlined, size: 22)),
-          ]));
-        },
-      ));
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final id = value.text;
+        final ready = id.isNotEmpty && id != translate('Generating ...');
+        return MrDeskLocalId(
+          id: ready ? formatID(id) : 'Gerando...',
+          onInfo: () => showDialog<void>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('ID de atendimento'),
+              content: const Text('Identificação deste computador no servidor remoto. O acesso depende das permissões e da autorização configuradas.'),
+              actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Fechar'))],
+            ),
+          ),
+          onCopy: ready ? () async {
+            await Clipboard.setData(ClipboardData(text: id));
+            showToast('ID copiado');
+          } : null,
+        );
+      },
+    );
   }
   Widget _tab(int i, int selected, IconData icon, String title) {
     final active = i == selected;
@@ -474,11 +472,11 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Icon(icon, color: _muted, size: 20), const SizedBox(width: 9),
-        Text(title, style: const TextStyle(color: _white, fontSize: 16, fontWeight: FontWeight.w700)),
+        Text(title, style: TextStyle(color: _white, fontSize: 16, fontWeight: FontWeight.w700)),
       ]),
       const SizedBox(height: 13),
       if (devices.isEmpty)
-        const Padding(padding: EdgeInsets.symmetric(vertical: 20),
+        Padding(padding: const EdgeInsets.symmetric(vertical: 20),
           child: Text('Nenhum computador nesta lista.', style: TextStyle(color: _muted)))
       else LayoutBuilder(builder: (context, constraints) {
         final width = mrDeskCardWidth(constraints.maxWidth);
@@ -511,14 +509,14 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                   tooltip: favorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos',
                   onPressed: () => _toggleFavorite(peer),
                   icon: Icon(favorite ? Icons.star_rounded : Icons.star_border_rounded,
-                    color: favorite ? const Color(0xFFFFC857) : _white, size: 23))),
+                    color: favorite ? const Color(0xFFFFC857) : const Color(0xFFF8FAFC), size: 23))),
               ])),
               SizedBox(height: 37, child: Row(children: [
                 const SizedBox(width: 10),
-                const Icon(Icons.desktop_windows_outlined, color: _white, size: 19),
+                Icon(Icons.desktop_windows_outlined, color: _white, size: 19),
                 const SizedBox(width: 9),
                 Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _white, fontSize: 13, fontWeight: FontWeight.w600))),
+                  style: TextStyle(color: _white, fontSize: 13, fontWeight: FontWeight.w600))),
                 Builder(builder: (buttonContext) => IconButton(
                   padding: EdgeInsets.zero, constraints: const BoxConstraints.tightFor(width: 35, height: 34),
                   tooltip: 'Mais opções',
@@ -528,7 +526,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                     await menu.showMrTechnicianMenu(buttonContext, RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx, pos.dy));
                     if (mounted) _refreshFavorites();
                   },
-                  icon: const Icon(Icons.more_vert, color: _white, size: 20))),
+                  icon: Icon(Icons.more_vert, color: _white, size: 20))),
               ])),
             ])),
         ),

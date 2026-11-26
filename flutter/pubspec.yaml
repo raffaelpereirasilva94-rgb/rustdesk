@@ -159,6 +159,11 @@ flutter:
     - assets/
 
   fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/Inter-Variable.ttf
+        - asset: assets/Inter-Italic-Variable.ttf
+          style: italic
     - family: GestureIcons
       fonts:
         - asset: assets/gestures.ttf
