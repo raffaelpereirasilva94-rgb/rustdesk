@@ -4,7 +4,7 @@ use super::super::{
 use hbb_common::{anyhow::anyhow, log, ResultType};
 use std::path::{Path, PathBuf};
 use windows::{
-    core::{w, Owned, PCWSTR},
+    core::{Owned, PCWSTR},
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
@@ -28,7 +28,7 @@ use windows::{
 };
 
 // The owner can read and create children, but cannot delete or change permissions.
-const STAGING_DIRECTORY_SDDL: PCWSTR = w!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200af;;;OW)");
+const STAGING_DIRECTORY_SDDL: &str = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200af;;;OW)";
 
 pub(super) struct StagingDirectory {
     path: PathBuf,
@@ -36,8 +36,8 @@ pub(super) struct StagingDirectory {
 }
 
 impl StagingDirectory {
-    pub(super) fn new(path: &Path) -> ResultType<Self> {
-        let descriptor = security_descriptor()?;
+    pub(super) fn new(path: &Path, owner: Option<&str>) -> ResultType<Self> {
+        let descriptor = security_descriptor(owner)?;
         let native_path = NativePath::new(path)?;
         let attributes = OBJECT_ATTRIBUTES {
             Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
@@ -119,11 +119,16 @@ impl Drop for NativePath {
     }
 }
 
-fn security_descriptor() -> ResultType<Owned<HLOCAL>> {
+fn security_descriptor(owner: Option<&str>) -> ResultType<Owned<HLOCAL>> {
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    let sddl = owner.map_or_else(
+        || STAGING_DIRECTORY_SDDL.to_owned(),
+        |sid| format!("O:{sid}{STAGING_DIRECTORY_SDDL}"),
+    );
+    let sddl = wide_string(&sddl);
     unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            STAGING_DIRECTORY_SDDL,
+            PCWSTR(sddl.as_ptr()),
             SDDL_REVISION_1,
             &mut descriptor,
             None,

@@ -50,12 +50,23 @@ impl ProtectedInstallFile {
         source: &mut impl Read,
         expected_sha256: Option<&str>,
     ) -> ResultType<Self> {
+        Self::create_with_owner(path, source, expected_sha256, None)
+    }
+
+    // Production uses the token's default owner. An explicit owner is only
+    // supplied by the regression fixture to model a non-elevated creator.
+    fn create_with_owner(
+        path: &Path,
+        source: &mut impl Read,
+        expected_sha256: Option<&str>,
+        owner: Option<&str>,
+    ) -> ResultType<Self> {
         let filename = path
             .file_name()
             .ok_or_else(|| anyhow!("Protected installer path has no filename"))?;
-        let directory = staging::StagingDirectory::new(&path.with_extension("stage"))?;
+        let directory = staging::StagingDirectory::new(&path.with_extension("stage"), owner)?;
         let path = directory.path().join(filename);
-        let mut file = create_protected_file(&path)?;
+        let mut file = create_protected_file(&path, owner)?;
         let result = (|| -> ResultType<Owned<HANDLE>> {
             io::copy(source, &mut file)?;
             file.sync_all()?;
@@ -120,13 +131,16 @@ impl Drop for ProtectedInstallFile {
     }
 }
 
-fn create_protected_file(path: &Path) -> ResultType<File> {
+fn create_protected_file(path: &Path, owner: Option<&str>) -> ResultType<File> {
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     // Restrict OWNER RIGHTS at creation so the unelevated creator cannot reopen
     // the file for writing or grant itself that permission after staging.
+    const DACL: &str = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;OW)";
+    let sddl = owner.map_or_else(|| DACL.to_owned(), |sid| format!("O:{sid}{DACL}"));
+    let sddl = wide_string(&sddl);
     unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            w!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;OW)"),
+            PCWSTR(sddl.as_ptr()),
             SDDL_REVISION_1,
             &mut descriptor,
             None,
@@ -278,9 +292,16 @@ pub(super) mod tests {
         let root = std::env::temp_dir().join(format!("rustdesk-staging-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
         let path = root.join("input.tmp");
-        let file =
-            ProtectedInstallFile::create(&path, &mut io::Cursor::new(b"rustdesk"), Some(HASH))
-                .unwrap();
+        // Model the individual owner at creation. Changing ownership afterwards
+        // can transform the OWNER RIGHTS ACE into an inherit-only ACE.
+        let owner = super::super::acl::current_process_user_sid_string().unwrap();
+        let file = ProtectedInstallFile::create_with_owner(
+            &path,
+            &mut io::Cursor::new(b"rustdesk"),
+            Some(HASH),
+            Some(&owner),
+        )
+        .unwrap();
         assert_eq!(
             ordinary_owner_access(file.path()),
             (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE).0
