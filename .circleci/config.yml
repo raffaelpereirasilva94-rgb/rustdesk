@@ -8,7 +8,7 @@ parameters:
     default: false
   validation_suite:
     type: enum
-    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe]
+    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser]
     default: all
 
 # Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
@@ -1455,6 +1455,22 @@ jobs:
             if (($launcherText.Split([string[]]@($flagAnchor),[StringSplitOptions]::None)).Count -ne 2) { throw 'Unexpected Flutter browser launcher source.' }
             $launcherText = $launcherText.Replace($flagAnchor, "$flagAnchor" + [Environment]::NewLine + "          if (_platform.isWindows) '--enable-logging=stderr',")
             [IO.File]::WriteAllText($launcher,$launcherText,(New-Object System.Text.UTF8Encoding($false)))
+            # Flutter 3.24.5's test HTTP handler converts relative URLs to
+            # Windows paths before comparing against the URL prefix canvaskit/.
+            # Normalize only this handler, before the SDK tool snapshot is built.
+            $webPlatform = Join-Path $flutterRoot 'packages\flutter_tools\lib\src\test\flutter_web_platform.dart'
+            $webText = [IO.File]::ReadAllText($webPlatform)
+            $oldLine = "    final String fullPath = _fileSystem.path.fromUri(request.url);"
+            $newLine = "    final String fullPath = _fileSystem.path.fromUri(request.url).replaceAll(r'\', '/');"
+            $handler = '  shelf.Response _localCanvasKitHandler(shelf.Request request) {'
+            $pattern = [regex]::Escape($handler) + '\r?\n' + [regex]::Escape($oldLine)
+            $matches = [regex]::Matches($webText,$pattern)
+            if ($matches.Count -ne 1) { throw 'Unexpected Flutter CanvasKit handler source.' }
+            $match = $matches[0]
+            $replacement = $match.Value.Replace($oldLine,$newLine)
+            $webText = $webText.Substring(0,$match.Index) + $replacement + $webText.Substring($match.Index+$match.Length)
+            [IO.File]::WriteAllText($webPlatform,$webText,(New-Object System.Text.UTF8Encoding($false)))
+            Write-Host 'FLUTTER_CANVASKIT_URL_PATCH_OK'
             $env:Path = "$flutterRoot\bin;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
             $env:CI = 'true'
             $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
@@ -1516,6 +1532,143 @@ jobs:
       - store_artifacts:
           path: .mr-test-logs
           destination: flutter-test-logs
+
+
+  windows-flutter-browser-tests:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Calculate source identity for generated bridge cache
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $identity = @('bridge-v1-flutter-3.22.3-codegen-1.80.1-expand-1.0.95-rust-1.75.0')
+            foreach ($path in @('src','flutter','libs','Cargo.toml','Cargo.lock','.cargo')) {
+              $object = git rev-parse "HEAD:$path"
+              if ($LASTEXITCODE -ne 0) { throw "Cannot identify bridge input $path" }
+              $identity += $object
+            }
+            $identity | Set-Content -LiteralPath '.mr-bridge-cache-key' -Encoding ASCII
+      - restore_cache:
+          keys:
+            - 'mr-bridge-v1-win-x64-{{ checksum ".mr-bridge-cache-key" }}'
+      - run:
+          name: Run only browser tests using the existing Bridge cache
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $repo = (Get-Location).Path
+            $workspace = Join-Path $repo '.mr-bridge'
+            if (-not (Test-Path -LiteralPath $workspace -PathType Container)) { throw 'Exact Bridge cache not found; no native rebuild was attempted.' }
+            Write-Host 'BRIDGE_CACHE_HIT_BROWSER_ONLY'
+            $files = @(
+              'src/bridge_generated.rs',
+              'src/bridge_generated.io.rs',
+              'flutter/lib/generated_bridge.dart',
+              'flutter/lib/generated_bridge.freezed.dart',
+              'flutter/macos/Runner/bridge_generated.h',
+              'flutter/ios/Runner/bridge_generated.h'
+            )
+            foreach ($file in $files) {
+              $source = Join-Path $workspace $file
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing workspace input: $file" }
+              if ((Get-Item -LiteralPath $source).Length -le 0) { throw "Empty workspace input: $file" }
+              $destination = Join-Path $repo $file
+              New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+              Copy-Item -LiteralPath $source -Destination $destination -Force
+              Write-Host "Restored: $file"
+            }
+            git submodule update --init --recursive
+            Assert-NativeExit 'Repository submodules'
+            $flutterRoot = 'C:\mr-flutter-release'
+            git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git $flutterRoot
+            Assert-NativeExit 'Flutter release SDK checkout'
+            $launcher = Join-Path $flutterRoot 'packages\flutter_tools\lib\src\web\chrome.dart'
+            $launcherText = [IO.File]::ReadAllText($launcher)
+            $flagAnchor = "          '--headless',"
+            if (($launcherText.Split([string[]]@($flagAnchor),[StringSplitOptions]::None)).Count -ne 2) { throw 'Unexpected Flutter browser launcher source.' }
+            $launcherText = $launcherText.Replace($flagAnchor, "$flagAnchor" + [Environment]::NewLine + "          if (_platform.isWindows) '--enable-logging=stderr',")
+            [IO.File]::WriteAllText($launcher,$launcherText,(New-Object System.Text.UTF8Encoding($false)))
+            # Flutter 3.24.5's test HTTP handler converts relative URLs to
+            # Windows paths before comparing against the URL prefix canvaskit/.
+            # Normalize only this handler, before the SDK tool snapshot is built.
+            $webPlatform = Join-Path $flutterRoot 'packages\flutter_tools\lib\src\test\flutter_web_platform.dart'
+            $webText = [IO.File]::ReadAllText($webPlatform)
+            $oldLine = "    final String fullPath = _fileSystem.path.fromUri(request.url);"
+            $newLine = "    final String fullPath = _fileSystem.path.fromUri(request.url).replaceAll(r'\', '/');"
+            $handler = '  shelf.Response _localCanvasKitHandler(shelf.Request request) {'
+            $pattern = [regex]::Escape($handler) + '\r?\n' + [regex]::Escape($oldLine)
+            $matches = [regex]::Matches($webText,$pattern)
+            if ($matches.Count -ne 1) { throw 'Unexpected Flutter CanvasKit handler source.' }
+            $match = $matches[0]
+            $replacement = $match.Value.Replace($oldLine,$newLine)
+            $webText = $webText.Substring(0,$match.Index) + $replacement + $webText.Substring($match.Index+$match.Length)
+            [IO.File]::WriteAllText($webPlatform,$webText,(New-Object System.Text.UTF8Encoding($false)))
+            Write-Host 'FLUTTER_CANVASKIT_URL_PATCH_OK'
+            $env:Path = "$flutterRoot\bin;C:\Program Files\Git\bin;$env:Path"
+            $env:CI = 'true'
+            $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+            $flutter = Join-Path $flutterRoot 'bin\flutter.bat'
+            $flutterVersion = & $flutter --version | Out-String
+            Assert-NativeExit 'Flutter release SDK initialization'
+            Write-Host $flutterVersion
+            if ($flutterVersion -notmatch 'Flutter 3\.24\.5\b') { throw 'Unexpected Flutter version.' }
+            & $flutter config --no-analytics
+            Assert-NativeExit 'Disable Flutter analytics'
+            $patch = Join-Path $repo '.github\patches\flutter_3.24.4_dropdown_menu_enableFilter.diff'
+            git -C $flutterRoot apply --check $patch
+            Assert-NativeExit 'Flutter release patch compatibility'
+            git -C $flutterRoot apply $patch
+            Assert-NativeExit 'Apply Flutter release patch'
+            Write-Host 'FLUTTER_TEST_SDK_AND_PATCH_OK'
+            # A pinned automation-only Chrome build avoids the MSI/GUI launcher
+            # that exits before Flutter receives the DevTools readiness message.
+            $browserVersion = '158.0.8127.88'
+            $browserZip = Join-Path $env:TEMP 'mr-chrome-headless-shell.zip'
+            $browserRoot = Join-Path $env:TEMP 'mr-chrome-headless-shell'
+            $browserUrl = "https://storage.googleapis.com/chrome-for-testing-public/$browserVersion/win64/chrome-headless-shell-win64.zip"
+            Invoke-WebRequest -UseBasicParsing -Uri $browserUrl -OutFile $browserZip
+            Write-Host "CHROME_ARCHIVE_SHA256=$((Get-FileHash -LiteralPath $browserZip -Algorithm SHA256).Hash)"
+            Expand-Archive -LiteralPath $browserZip -DestinationPath $browserRoot -Force
+            $chrome = Join-Path $browserRoot 'chrome-headless-shell-win64\chrome-headless-shell.exe'
+            if (-not (Test-Path -LiteralPath $chrome -PathType Leaf)) { throw 'Chrome Headless Shell executable missing.' }
+            $env:CHROME_EXECUTABLE = $chrome
+            Write-Host "CHROME_EXECUTABLE=$chrome; VERSION=$browserVersion"
+            & $flutter precache --web
+            Assert-NativeExit 'Flutter web engine precache'
+            Push-Location (Join-Path $repo 'flutter')
+            try {
+              & $flutter pub get
+              Assert-NativeExit 'Flutter release dependencies'
+            } finally { Pop-Location }
+            $env:PYTHONUTF8 = '1'
+            # Run the actual browser-only regression tests, not the already
+            # approved native suite. Require all three named cases to pass.
+            $atom = 'flutter/test/floating_mouse_hold_test.dart'
+            python -u .circleci/test_runner.py run flutter ".mr-test-results/flutter/junit.xml" $atom
+            Assert-NativeExit 'Flutter browser regression tests'
+            [xml]$report = Get-Content -LiteralPath '.mr-test-results/flutter/junit.xml' -Raw
+            $cases = @($report.testsuite.testcase | Where-Object { $_.name -match 'pending hold cannot press after (release|cancel|dispose)' })
+            if ($cases.Count -ne 3) { throw "Expected three browser regression cases; got $($cases.Count)" }
+            foreach ($case in $cases) {
+              if ($case.failure -or $case.error -or $case.skipped) { throw "Browser case not passed: $($case.name)" }
+            }
+            Write-Host 'FLUTTER_BROWSER_TESTS_OK (3/3)'
+          no_output_timeout: 5m
+      - store_test_results:
+          path: .mr-test-results
+      - store_artifacts:
+          path: .mr-test-results
+          destination: flutter-browser-test-reports
+      - store_artifacts:
+          path: .mr-test-logs
+          destination: flutter-browser-test-logs
 
 
   windows-owner-probe:
@@ -1665,3 +1818,10 @@ workflows:
         - equal: [acl-chrome-probe, << pipeline.parameters.validation_suite >>]
     jobs:
       - windows-acl-chrome-probe
+  validate-flutter-browser:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - equal: [flutter-browser, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-flutter-browser-tests
