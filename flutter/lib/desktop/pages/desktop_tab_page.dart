@@ -25,6 +25,18 @@ class DesktopTabPage extends StatefulWidget {
   // Called before the native main window is shown, after restoring its position.
   // Do not let the generic desktop startup re-enable resizing afterwards.
   static Future<void> prepareMrClientWindow() async {
+    if (useMrTechnicianLayout) {
+      await windowManager.setResizable(true);
+      await windowManager.setMaximizable(true);
+      if (!await windowManager.isMaximized()) {
+        final size = await windowManager.getSize();
+        // The shared native profile may remember the compact client window.
+        if (size.width < 900 || size.height < 560) {
+          await windowManager.setSize(const Size(1100, 650));
+        }
+      }
+      return;
+    }
     if (!usesMrClientWindow) return;
     await applyMrClientWindowMode(home: true);
   }
