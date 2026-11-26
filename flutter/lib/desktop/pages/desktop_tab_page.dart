@@ -4,6 +4,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -141,7 +142,9 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
                           ? null
                           : () => DesktopTabPage.onAddSetting(),
                     )
-                  : null,
+                  : useMrTechnicianLayout
+                      ? const SizedBox.shrink()
+                      : null,
               tail: Offstage(
                 offstage: bind.isIncomingOnly() || bind.isDisableSettings(),
                 child: ActionIcon(

@@ -13,6 +13,7 @@ import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -68,6 +69,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           status: const OnlineStatusWidget(mrClientLayout: true),
         ),
       );
+    }
+    if (useMrTechnicianLayout) {
+      return _buildBlock(child: MrTechnicianPanel(
+        systemError: systemError,
+        securityWarning: bind.isOutgoingOnly()
+            ? const SizedBox.shrink() : buildPresetPasswordWarning(),
+        status: const OnlineStatusWidget(mrTechnicianLayout: true),
+        onSettings: bind.isDisableSettings()
+            ? null : () => DesktopTabPage.onAddSetting(),
+      ));
     }
     final isIncomingOnly = bind.isIncomingOnly();
     return _buildBlock(

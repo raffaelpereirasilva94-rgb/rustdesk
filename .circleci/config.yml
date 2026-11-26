@@ -8,7 +8,7 @@ parameters:
     default: false
   validation_suite:
     type: enum
-    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified, visual-preview, client-preview]
+    enum: [all, rust-core, clipboard, flutter, owner-probe, rust-flutter, acl-chrome-probe, flutter-browser, package-verified, visual-preview, client-preview, technician-preview]
     default: all
 
 # Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
@@ -631,6 +631,9 @@ jobs:
       mr_client_preview:
         type: boolean
         default: false
+      mr_technician_preview:
+        type: boolean
+        default: false
     machine:
       image: windows-server-2022-gui:current
       shell: powershell.exe -ExecutionPolicy Bypass
@@ -721,6 +724,8 @@ jobs:
               Assert-NativeExit 'Flutter release dependencies'
               if ('<< parameters.mr_client_preview >>' -eq 'true') {
                 & $flutter build windows --release --no-pub --dart-define=MR_CLIENT_PREVIEW=true
+              } elseif ('<< parameters.mr_technician_preview >>' -eq 'true') {
+                & $flutter build windows --release --no-pub --dart-define=MR_TECHNICIAN_PREVIEW=true
               } else {
                 & $flutter build windows --release --no-pub
               }
@@ -1987,6 +1992,8 @@ jobs:
             }
             $zipName = if ('<< pipeline.parameters.validation_suite >>' -eq 'client-preview') {
               'MRRemote-v0.2-client-preview-windows-x64-unsigned.zip'
+            } elseif ('<< pipeline.parameters.validation_suite >>' -eq 'technician-preview') {
+              'MRRemote-v0.2-technician-preview-windows-x64-unsigned.zip'
             } else {
               'MRRemote-v0.2-visual-preview-windows-x64-unsigned.zip'
             }
@@ -2152,6 +2159,21 @@ workflows:
       - windows-visual-preview-input
       - windows-flutter-build:
           mr_client_preview: true
+          requires:
+            - windows-visual-preview-input
+      - windows-visual-preview-package:
+          requires:
+            - windows-flutter-build
+  technician-preview-v020:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - not: << pipeline.parameters.smarter_testing >>
+        - equal: [technician-preview, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-visual-preview-input
+      - windows-flutter-build:
+          mr_technician_preview: true
           requires:
             - windows-visual-preview-input
       - windows-visual-preview-package:

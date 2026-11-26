@@ -557,6 +557,13 @@ abstract class BasePeerCard extends StatelessWidget {
     );
   }
 
+  // Keep the original per-device actions and native session path.
+  Future<void> showMrTechnicianMenu(BuildContext context, RelativeRect position) async {
+    final items = await _buildPopupMenuEntry(context);
+    if (!context.mounted) return;
+    await mod_menu.showMenu(context: context, position: position, items: items, elevation: 8);
+  }
+
   Future<List<mod_menu.PopupMenuEntry<String>>> _buildPopupMenuEntry(
           BuildContext context) async =>
       (await _buildMenuItems(context))

@@ -23,11 +23,13 @@ import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 
 class OnlineStatusWidget extends StatefulWidget {
   const OnlineStatusWidget(
-      {Key? key, this.onSvcStatusChanged, this.mrClientLayout = false})
+      {Key? key, this.onSvcStatusChanged, this.mrClientLayout = false,
+      this.mrTechnicianLayout = false})
       : super(key: key);
 
   final VoidCallback? onSvcStatusChanged;
   final bool mrClientLayout;
+  final bool mrTechnicianLayout;
 
   @override
   State<OnlineStatusWidget> createState() => _OnlineStatusWidgetState();
@@ -67,7 +69,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.mrClientLayout) {
+    if (widget.mrClientLayout || widget.mrTechnicianLayout) {
       return Obx(() {
         final stopped = _svcStopped.value;
         final status = stateGlobal.svcStatus.value;
@@ -84,7 +86,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
             : publicServer
                 ? 'Servidor público'
                 : ready
-                    ? 'Pronto para conectar'
+                    ? (widget.mrTechnicianLayout ? 'Servidor pronto.' : 'Pronto para conectar')
                     : connecting
                         ? 'Conectando...'
                         : 'Servidor indisponível';
