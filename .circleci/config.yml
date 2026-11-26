@@ -6,6 +6,10 @@ parameters:
   smarter_testing:
     type: boolean
     default: false
+  validation_suite:
+    type: enum
+    enum: [all, rust-core, clipboard, flutter, owner-probe]
+    default: all
 
 # Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
 jobs:
@@ -1492,9 +1496,42 @@ jobs:
           path: .mr-test-logs
           destination: flutter-test-logs
 
+
+  windows-owner-probe:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - run:
+          name: Inspect Windows default ownership without compiling
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+            $root = Join-Path $env:TEMP ("mr-owner-probe-" + [Guid]::NewGuid())
+            try {
+              New-Item -ItemType Directory -Path $root | Out-Null
+              $file = Join-Path $root 'probe.txt'
+              Set-Content -LiteralPath $file -Value 'owner probe'
+              Write-Host "TOKEN_USER_SID=$($identity.User.Value)"
+              Write-Host "TOKEN_OWNER_SID=$($identity.Owner.Value)"
+              Write-Host "TOKEN_IS_ADMIN=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+              foreach ($item in @($root,$file)) {
+                $acl = Get-Acl -LiteralPath $item
+                Write-Host "OBJECT_OWNER_SID=$($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)"
+              }
+              Write-Host 'WINDOWS_OWNER_PROBE_OK'
+            } finally {
+              if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+            }
+
 workflows:
   validate:
-    unless: << pipeline.parameters.build_distribution >>
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - equal: [all, << pipeline.parameters.validation_suite >>]
     jobs:
       - windows-native-bootstrap
       - windows-rust-core-tests:
@@ -1530,3 +1567,41 @@ workflows:
       - windows-package:
           requires:
             - windows-flutter-build
+
+  validate-rust-core:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - equal: [rust-core, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-native-bootstrap
+      - windows-rust-core-tests:
+          requires:
+            - windows-native-bootstrap
+  validate-clipboard:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - equal: [clipboard, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-native-bootstrap
+      - windows-rust-clipboard-tests:
+          requires:
+            - windows-native-bootstrap
+  validate-flutter:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - equal: [flutter, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-native-bootstrap
+      - windows-flutter-tests:
+          requires:
+            - windows-native-bootstrap
+  diagnose-windows-owner:
+    when:
+      and:
+        - not: << pipeline.parameters.build_distribution >>
+        - equal: [owner-probe, << pipeline.parameters.validation_suite >>]
+    jobs:
+      - windows-owner-probe
