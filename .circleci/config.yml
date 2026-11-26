@@ -1449,6 +1449,12 @@ jobs:
             $flutterRoot = 'C:\mr-flutter-release'
             git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git $flutterRoot
             Assert-NativeExit 'Flutter release SDK checkout'
+            $launcher = Join-Path $flutterRoot 'packages\flutter_tools\lib\src\web\chrome.dart'
+            $launcherText = [IO.File]::ReadAllText($launcher)
+            $flagAnchor = "          '--headless',"
+            if (($launcherText.Split([string[]]@($flagAnchor),[StringSplitOptions]::None)).Count -ne 2) { throw 'Unexpected Flutter browser launcher source.' }
+            $launcherText = $launcherText.Replace($flagAnchor, "$flagAnchor" + [Environment]::NewLine + "          if (_platform.isWindows) '--enable-logging=stderr',")
+            [IO.File]::WriteAllText($launcher,$launcherText,(New-Object System.Text.UTF8Encoding($false)))
             $env:Path = "$flutterRoot\bin;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
             $env:CI = 'true'
             $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
@@ -1467,22 +1473,19 @@ jobs:
             git -C $flutterRoot apply $patch
             Assert-NativeExit 'Apply Flutter release patch'
             Write-Host 'FLUTTER_TEST_SDK_AND_PATCH_OK'
-            # The repository contains a browser-only test. Use Chrome if
-            # present; otherwise provision it only on this ephemeral test VM.
-            $chromeCandidates = @($env:CHROME_EXECUTABLE,
-              (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
-              (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
-              (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe'))
-            $chrome = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-            if (-not $chrome) {
-              Get-Command choco -ErrorAction Stop | Out-Null
-              choco install googlechrome --yes --no-progress
-              if ($LASTEXITCODE -notin @(0,1641,3010)) { throw "Chrome installation failed (exit $LASTEXITCODE)" }
-              $chrome = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-            }
-            if (-not $chrome) { throw 'Chrome executable not found.' }
+            # A pinned automation-only Chrome build avoids the MSI/GUI launcher
+            # that exits before Flutter receives the DevTools readiness message.
+            $browserVersion = '158.0.8127.88'
+            $browserZip = Join-Path $env:TEMP 'mr-chrome-headless-shell.zip'
+            $browserRoot = Join-Path $env:TEMP 'mr-chrome-headless-shell'
+            $browserUrl = "https://storage.googleapis.com/chrome-for-testing-public/$browserVersion/win64/chrome-headless-shell-win64.zip"
+            Invoke-WebRequest -UseBasicParsing -Uri $browserUrl -OutFile $browserZip
+            Write-Host "CHROME_ARCHIVE_SHA256=$((Get-FileHash -LiteralPath $browserZip -Algorithm SHA256).Hash)"
+            Expand-Archive -LiteralPath $browserZip -DestinationPath $browserRoot -Force
+            $chrome = Join-Path $browserRoot 'chrome-headless-shell-win64\chrome-headless-shell.exe'
+            if (-not (Test-Path -LiteralPath $chrome -PathType Leaf)) { throw 'Chrome Headless Shell executable missing.' }
             $env:CHROME_EXECUTABLE = $chrome
-            Write-Host "CHROME_EXECUTABLE=$chrome"
+            Write-Host "CHROME_EXECUTABLE=$chrome; VERSION=$browserVersion"
             & $flutter precache --web
             Assert-NativeExit 'Flutter web engine precache'
             Push-Location (Join-Path $repo 'flutter')
