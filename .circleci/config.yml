@@ -1,6 +1,13 @@
 version: 2.1
+parameters:
+  build_distribution:
+    type: boolean
+    default: false
+  smarter_testing:
+    type: boolean
+    default: false
 
-# Windows release build, testsuite doctor/run, JUnit reports and unsigned test packaging. No deploy.
+# Default: independent test jobs with native JUnit reports. Distribution and Smarter Testing opt-in; no deploy.
 jobs:
   windows-diagnostic:
     machine:
@@ -237,6 +244,20 @@ jobs:
 
 
       - run:
+          name: Calculate source identity for generated bridge cache
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $identity = @('bridge-v1-flutter-3.22.3-codegen-1.80.1-expand-1.0.95-rust-1.75.0')
+            foreach ($path in @('src','flutter','libs','Cargo.toml','Cargo.lock','.cargo')) {
+              $object = git rev-parse "HEAD:$path"
+              if ($LASTEXITCODE -ne 0) { throw "Cannot identify bridge input $path" }
+              $identity += $object
+            }
+            $identity | Set-Content -LiteralPath '.mr-bridge-cache-key' -Encoding ASCII
+      - restore_cache:
+          keys:
+            - 'mr-bridge-v1-win-x64-{{ checksum ".mr-bridge-cache-key" }}'
+      - run:
           name: Generate pinned Flutter Rust bridge on Windows
           command: |
             $ErrorActionPreference = 'Stop'
@@ -246,6 +267,16 @@ jobs:
             }
             # Same agent as the successful native bootstrap; environment is per run step.
             $repo = (Get-Location).Path
+            $cachedBridge = Join-Path $repo '.mr-bridge'
+            $expectedBridge = @('src/bridge_generated.rs','src/bridge_generated.io.rs','flutter/lib/generated_bridge.dart','flutter/lib/generated_bridge.freezed.dart','flutter/macos/Runner/bridge_generated.h','flutter/ios/Runner/bridge_generated.h')
+            $complete = $true
+            foreach ($file in $expectedBridge) {
+              $candidate = Join-Path $cachedBridge $file
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { $complete = $false; break }
+              if ((Get-Item -LiteralPath $candidate).Length -le 0) { $complete = $false; break }
+            }
+            if ($complete) { Write-Host 'BRIDGE_CACHE_HIT: all six generated files present'; return }
+            if (Test-Path -LiteralPath $cachedBridge) { Remove-Item -LiteralPath $cachedBridge -Recurse -Force }
             $root = 'C:\mr-native-tools'
             $env:CARGO_HOME = Join-Path $root 'cargo'
             $env:RUSTUP_HOME = Join-Path $root 'rustup'
@@ -325,6 +356,10 @@ jobs:
             Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
             Write-Host 'BRIDGE_GENERATION_OK (six generated source files; no application build or tests)'
           no_output_timeout: 15m
+      - save_cache:
+          key: 'mr-bridge-v1-win-x64-{{ checksum ".mr-bridge-cache-key" }}'
+          paths:
+            - .mr-bridge
       - persist_to_workspace:
           root: .mr-bridge
           paths:
@@ -587,95 +622,6 @@ jobs:
           path: .mr-core
           destination: rust-core-artifact
 
-      - run:
-          name: Validate and run Rust Smarter Testing suites
-          command: |
-            $ErrorActionPreference = 'Stop'
-            $ProgressPreference = 'SilentlyContinue'
-            function Assert-NativeExit([string]$action) {
-              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
-            }
-            $repo = (Get-Location).Path
-            $root = 'C:\mr-native-tools'
-            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-            Assert-NativeExit 'VS 2022 discovery'
-            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
-            $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-            if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) { throw 'vcvars64.bat missing.' }
-            $devCommand = 'call "' + $vcvars + '" >nul && set'
-            $devEnvironment = & cmd.exe /d /c $devCommand
-            Assert-NativeExit 'MSVC x64 environment initialization'
-            foreach ($line in $devEnvironment) {
-              if ($line -match '^([^=]+)=(.*)$') {
-                [Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')
-              }
-            }
-            $env:CARGO_HOME = Join-Path $root 'cargo'
-            $env:RUSTUP_HOME = Join-Path $root 'rustup'
-            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
-            $env:LIBCLANG_PATH = Join-Path $root 'llvm\bin'
-            $env:VCPKG_ROOT = Join-Path $root 'vcpkg'
-            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
-            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
-            $env:VCPKG_DEFAULT_TRIPLET = 'x64-windows-static'
-            $env:CARGO_BUILD_JOBS = '4'
-            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
-            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
-            $env:Path = "$env:CARGO_HOME\bin;$env:LIBCLANG_PATH;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
-            $compiler = Get-Command cl.exe -ErrorAction Stop
-            Write-Host "MSVC compiler: $($compiler.Source)"
-            if ($compiler.Source -notlike "$vs\*") { throw 'Unexpected MSVC compiler.' }
-            $rustVersion = & rustc --version
-            Assert-NativeExit 'Rust version'
-            if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw "Unexpected Rust version: $rustVersion" }
-            Write-Host $rustVersion
-            $linker = Join-Path (Split-Path -Parent $compiler.Source) 'link.exe'
-            if (-not (Test-Path -LiteralPath $linker -PathType Leaf)) { throw "MSVC linker missing: $linker" }
-            $env:MR_MSVC_LINKER = $linker
-            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
-            $env:Path = "$(Split-Path -Parent $linker);$env:Path"
-            Write-Host "Selected MSVC linker: $linker"
-            $env:PYTHONUTF8 = '1'
-            $env:MR_RELEASE_FEATURES = (Get-Content -LiteralPath '.mr-core\release-features.txt' -Raw).Trim()
-            Get-Command circleci -ErrorAction Stop | Out-Null
-            circleci version
-            Assert-NativeExit 'CircleCI CLI version'
-            $failed = @()
-            foreach ($suite in @('rust core','rust clipboard')) {
-              Write-Host "DOCTOR: $suite"
-              circleci testsuite doctor $suite
-              if ($LASTEXITCODE -ne 0) {
-                $failed += "doctor: $suite"
-                $suiteId = if ($suite -eq 'rust core') { 'rust-core' } else { 'rust-clipboard' }
-                $logDir = Join-Path '.mr-test-logs' $suiteId
-                if (Test-Path -LiteralPath $logDir) {
-                  Get-ChildItem -LiteralPath $logDir -Filter '*.log' -File | ForEach-Object {
-                    Write-Host "FULL NATIVE FAILURE LOG (last 200 lines): $($_.Name)"
-                    Get-Content -LiteralPath $_.FullName -Tail 200
-                  }
-                }
-                continue
-              }
-              $dir = if ($suite -eq 'rust core') { '.mr-test-results\rust-core' } else { '.mr-test-results\rust-clipboard' }
-              if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
-              circleci testsuite run $suite
-              if ($LASTEXITCODE -ne 0) { $failed += "run: $suite" }
-            }
-            if ($failed.Count -gt 0) { throw "Rust suite checks failed: $($failed -join ', ')" }
-            Write-Host 'RUST_AUTOMATED_TESTS_OK'
-          no_output_timeout: 25m
-      - store_test_results:
-          path: .mr-test-results
-      - store_artifacts:
-          path: .mr-test-results
-          destination: rust-test-reports
-      - store_artifacts:
-          path: .mr-test-logs
-          destination: rust-test-logs
-
-
-
   windows-flutter-build:
     machine:
       image: windows-server-2022-gui:current
@@ -797,41 +743,6 @@ jobs:
       - store_artifacts:
           path: .mr-flutter-output/windows-app
           destination: windows-app-preview
-
-      - run:
-          name: Validate and run Flutter Smarter Testing suite
-          command: |
-            $ErrorActionPreference = 'Stop'
-            $env:PYTHONUTF8 = '1'
-            $env:CI = 'true'
-            $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
-            $env:Path = "C:\mr-flutter-release\bin;$env:Path"
-            Get-Command circleci -ErrorAction Stop | Out-Null
-            circleci testsuite doctor "flutter tests"
-            if ($LASTEXITCODE -ne 0) {
-              if (Test-Path -LiteralPath '.mr-test-logs\flutter') {
-                Get-ChildItem -LiteralPath '.mr-test-logs\flutter' -Filter '*.log' -File | ForEach-Object {
-                  Write-Host "FLUTTER FAILURE LOG (last 200 lines): $($_.Name)"
-                  Get-Content -LiteralPath $_.FullName -Tail 200
-                }
-              }
-              throw 'Flutter testsuite doctor failed.'
-            }
-            if (Test-Path -LiteralPath '.mr-test-results\flutter') { Remove-Item -LiteralPath '.mr-test-results\flutter' -Recurse -Force }
-            circleci testsuite run "flutter tests"
-            if ($LASTEXITCODE -ne 0) { throw 'Flutter testsuite run failed.' }
-            Write-Host 'FLUTTER_AUTOMATED_TESTS_OK'
-          no_output_timeout: 25m
-      - store_test_results:
-          path: .mr-test-results
-      - store_artifacts:
-          path: .mr-test-results
-          destination: flutter-test-reports
-      - store_artifacts:
-          path: .mr-test-logs
-          destination: flutter-test-logs
-
-
 
   windows-package:
     machine:
@@ -973,19 +884,646 @@ jobs:
           path: .mr-package-output
           destination: mr-remote-windows-x64-test
 
+  windows-rust-core-tests:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Calculate vcpkg cache identity
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $manifest = (Get-FileHash -LiteralPath 'vcpkg.json' -Algorithm SHA256).Hash
+            $ports = git rev-parse HEAD:res/vcpkg
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify overlay ports.' }
+            $triplets = git rev-parse HEAD:res/vcpkg-triplets
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify overlay triplets.' }
+            @($manifest,$ports,$triplets) | Set-Content -Encoding ASCII '.mr-vcpkg-cache-key'
+      - restore_cache:
+          keys:
+            - 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
+      - run:
+          name: Prepare pinned Rust LLVM and vcpkg tools
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $root = 'C:\mr-native-tools'
+            New-Item -ItemType Directory -Force $root | Out-Null
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path $vswhere)) { throw 'vswhere is missing.' }
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio 2022 discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 MSVC x64 component is not installed.' }
+            Write-Host "Selected VS 2022: $vs"
+            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            foreach ($path in @("$cmake\cmake.exe","$ninja\ninja.exe")) {
+              if (-not (Test-Path $path)) { throw "Required tool missing: $path" }
+            }
+            $env:Path = "$cmake;$ninja;$env:Path"
+            cmake --version
+            Assert-NativeExit 'CMake version'
+            ninja --version
+            Assert-NativeExit 'Ninja version'
+            $env:CARGO_HOME = Join-Path $root 'cargo'
+            $env:RUSTUP_HOME = Join-Path $root 'rustup'
+            $env:RUSTUP_INIT_SKIP_PATH_CHECK = 'yes'
+            $installer = Join-Path $root 'rustup-init.exe'
+            $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $installer
+            # PowerShell 5.1 may return a byte array for the checksum response.
+            $checksumFile = Join-Path $root 'rustup-init.exe.sha256'
+            Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256" -OutFile $checksumFile
+            $checksumText = Get-Content -LiteralPath $checksumFile -Raw -Encoding ASCII
+            if ($checksumText -notmatch '^\s*([0-9a-fA-F]{64})(?:\s|$)') { throw 'Invalid Rustup SHA256 checksum response.' }
+            $checksum = $Matches[1]
+            $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            if ($actualHash -ine $checksum) { throw 'rustup installer checksum mismatch.' }
+            Write-Host 'RUSTUP_CHECKSUM_OK'
+            & $installer -y --no-modify-path --profile minimal --default-host x86_64-pc-windows-msvc --default-toolchain 1.75.0
+            Assert-NativeExit 'Rustup installation'
+            $env:Path = "$env:CARGO_HOME\bin;$env:Path"
+            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
+            rustup component add rustfmt
+            Assert-NativeExit 'Rustfmt installation'
+            $rustVersion = & rustc --version
+            Assert-NativeExit 'Rust version'
+            Write-Host $rustVersion
+            if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw 'Wrong Rust version.' }
+            cargo --version
+            Assert-NativeExit 'Cargo version'
+            # Match the release used by the successful GitHub Actions Windows build.
+            $llvmInstaller = Join-Path $root 'LLVM-15.0.6-win64.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.6/LLVM-15.0.6-win64.exe' -OutFile $llvmInstaller
+            Write-Host "LLVM installer SHA256: $((Get-FileHash $llvmInstaller -Algorithm SHA256).Hash)"
+            $llvm = Join-Path $root 'llvm'
+            $seven = Get-Command 7z.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            $sevenPath = if ($seven) { $seven.Source } else { 'C:\Program Files\7-Zip\7z.exe' }
+            if (-not (Test-Path $sevenPath)) { throw '7-Zip is required for LLVM extraction.' }
+            & $sevenPath x $llvmInstaller "-o$llvm" -y | Out-Null
+            Assert-NativeExit 'LLVM extraction'
+            $clang = Join-Path $llvm 'bin\clang.exe'
+            if (-not (Test-Path $clang)) { throw 'Clang executable not found in extracted LLVM.' }
+            $env:Path = "$llvm\bin;$env:Path"
+            $env:LIBCLANG_PATH = Join-Path $llvm 'bin'
+            & $clang --version
+            Assert-NativeExit 'Clang version'
+            $vcpkg = Join-Path $root 'vcpkg'
+            $pin = '9e593bb18ea69cc5095e012465dcd675a822ed0d'
+            git init $vcpkg
+            Assert-NativeExit 'vcpkg repository init'
+            git -C $vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+            Assert-NativeExit 'vcpkg remote configuration'
+            git -C $vcpkg fetch --depth 1 origin $pin
+            Assert-NativeExit 'vcpkg pinned revision fetch'
+            git -C $vcpkg checkout --detach FETCH_HEAD
+            Assert-NativeExit 'vcpkg checkout'
+            $actual = & git -C $vcpkg rev-parse HEAD
+            Assert-NativeExit 'vcpkg revision check'
+            if ($actual -ne $pin) { throw 'Wrong vcpkg revision.' }
+            $env:VCPKG_ROOT = $vcpkg
+            $env:VCPKG_DISABLE_METRICS = '1'
+            & "$vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+            Assert-NativeExit 'vcpkg bootstrap'
+            & "$vcpkg\vcpkg.exe" version
+            Assert-NativeExit 'vcpkg version'
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'NATIVE_BOOTSTRAP_OK'
+            # Keep these steps in the same agent and PowerShell process as bootstrap.
+            # The manifest selects historical port versions; shallow history can omit their trees.
+            $shallow = & git -C $vcpkg rev-parse --is-shallow-repository
+            Assert-NativeExit 'vcpkg history check'
+            if ($shallow -eq 'true') {
+              git -C $vcpkg fetch --unshallow origin $pin
+              Assert-NativeExit 'vcpkg historical port fetch'
+            }
+            $cachePath = Join-Path (Get-Location).Path '.mr-vcpkg-binary-cache'
+            New-Item -ItemType Directory -Force $cachePath | Out-Null
+            $restoredFiles = @(Get-ChildItem -LiteralPath $cachePath -File -Recurse)
+            Write-Host "VCPKG_CACHE_FILES_BEFORE_INSTALL=$($restoredFiles.Count)"
+            $env:VCPKG_BINARY_SOURCES = "clear;files,$cachePath,readwrite"
+            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
+            $env:VCPKG_MAX_CONCURRENCY = '4'
+            $installed = Join-Path $vcpkg 'installed'
+            Write-Host "VCPKG_ROOT=$vcpkg"
+            Write-Host "VCPKG_BINARY_CACHE=$cachePath"
+            Write-Host 'Installing the original RustDesk vcpkg manifest (x64-windows-static).'
+            & "$vcpkg\vcpkg.exe" install --triplet x64-windows-static --host-triplet x64-windows-static "--x-install-root=$installed" --clean-after-build
+            Assert-NativeExit 'vcpkg manifest installation'
+            if (-not (Test-Path (Join-Path $installed 'vcpkg\status'))) { throw 'vcpkg installed status missing.' }
+            foreach ($package in @('aom','libjpeg-turbo','opus','libvpx','libyuv','mfx-dispatch','ffmpeg')) {
+              $listFiles = @(Get-ChildItem -Path (Join-Path $installed 'vcpkg\info') -Filter "$($package)_*x64-windows-static.list" -ErrorAction Stop)
+              if ($listFiles.Count -eq 0) { throw "Expected installed package missing: $package" }
+              Write-Host "Installed: $package"
+            }
+            $cacheFiles = @(Get-ChildItem -LiteralPath $cachePath -File -Recurse)
+            $cacheBytes = ($cacheFiles | Measure-Object Length -Sum).Sum
+            if ($cacheFiles.Count -eq 0) { throw 'No binary cache packages found.' }
+            Write-Host "Cache files: $($cacheFiles.Count); size MiB: $([math]::Round($cacheBytes/1MB,2))"
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'VCPKG_LIBRARIES_OK (native dependencies only; no application build or tests)'
+          no_output_timeout: 15m
+      - save_cache:
+          key: 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
+          paths:
+            - .mr-vcpkg-binary-cache
+
+      - attach_workspace:
+          at: .mr-bridge-input
+      - run:
+          name: Run rust core tests without distribution build
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $repo = (Get-Location).Path
+            $root = 'C:\mr-native-tools'
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'VS 2022 discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
+            $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+            if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) { throw 'vcvars64.bat missing.' }
+            $devCommand = 'call "' + $vcvars + '" >nul && set'
+            $devEnvironment = & cmd.exe /d /c $devCommand
+            Assert-NativeExit 'MSVC x64 environment initialization'
+            foreach ($line in $devEnvironment) {
+              if ($line -match '^([^=]+)=(.*)$') {
+                [Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')
+              }
+            }
+            $env:CARGO_HOME = Join-Path $root 'cargo'
+            $env:RUSTUP_HOME = Join-Path $root 'rustup'
+            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
+            $env:LIBCLANG_PATH = Join-Path $root 'llvm\bin'
+            $env:VCPKG_ROOT = Join-Path $root 'vcpkg'
+            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
+            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
+            $env:VCPKG_DEFAULT_TRIPLET = 'x64-windows-static'
+            $env:CARGO_BUILD_JOBS = '4'
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            $env:Path = "$env:CARGO_HOME\bin;$env:LIBCLANG_PATH;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
+            $compiler = Get-Command cl.exe -ErrorAction Stop
+            Write-Host "MSVC compiler: $($compiler.Source)"
+            if ($compiler.Source -notlike "$vs\*") { throw 'Unexpected MSVC compiler.' }
+            $rustVersion = & rustc --version
+            Assert-NativeExit 'Rust version'
+            if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw "Unexpected Rust version: $rustVersion" }
+            Write-Host $rustVersion
+            git submodule update --init --recursive
+            Assert-NativeExit 'Repository submodules'
+            $files = @(
+              'src/bridge_generated.rs',
+              'src/bridge_generated.io.rs',
+              'flutter/lib/generated_bridge.dart',
+              'flutter/lib/generated_bridge.freezed.dart',
+              'flutter/macos/Runner/bridge_generated.h',
+              'flutter/ios/Runner/bridge_generated.h'
+            )
+            foreach ($file in $files) {
+              $source = Join-Path (Join-Path $repo '.mr-bridge-input') $file
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing bridge workspace file: $file" }
+              if ((Get-Item -LiteralPath $source).Length -le 0) { throw "Empty bridge workspace file: $file" }
+              Copy-Item -LiteralPath $source -Destination (Join-Path $repo $file) -Force
+            }
+            # Match the original build.py Windows sequence and release feature flags.
+            $features = (& python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features | Out-String).Trim()
+            Assert-NativeExit 'Resolve release features'
+            if ($features -notmatch '^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$') { throw "Invalid feature list: $features" }
+            foreach ($feature in @('flutter','hwcodec','vram')) {
+              if (($features -split ',') -notcontains $feature) { throw "Missing required feature: $feature" }
+            }
+            Write-Host "MR_RELEASE_FEATURES=$features"
+            $linker = Join-Path (Split-Path -Parent $compiler.Source) 'link.exe'
+            if (-not (Test-Path -LiteralPath $linker -PathType Leaf)) { throw "MSVC linker missing: $linker" }
+            $env:MR_MSVC_LINKER = $linker
+            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
+            $env:Path = "$(Split-Path -Parent $linker);$env:Path"
+            Write-Host "Selected MSVC linker: $linker"
+            $env:MR_RELEASE_FEATURES = $features
+            $env:PYTHONUTF8 = '1'
+            # Only the test jobs use the lighter release compilation profile.
+            # Production builds keep Cargo.toml's original release profile.
+            $env:CARGO_PROFILE_RELEASE_LTO = 'off'
+            $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16'
+            $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'
+            $env:CARGO_PROFILE_RELEASE_DEBUG = '0'
+            Write-Host 'MR_TEST_PROFILE=release; lto=off; codegen-units=16; opt-level=1'
+            if ('<< pipeline.parameters.smarter_testing >>' -eq 'true') {
+              circleci testsuite doctor 'rust core'
+              Assert-NativeExit 'rust core doctor'
+              circleci testsuite run 'rust core'
+              Assert-NativeExit 'rust core run'
+            } else {
+              $atoms = @(python .circleci/test_runner.py discover rust-core)
+              Assert-NativeExit 'rust core discovery'
+              if ($atoms.Count -eq 0) { throw 'No test atoms discovered.' }
+              python -u .circleci/test_runner.py run rust-core ".mr-test-results/rust-core/junit.xml" @atoms
+              Assert-NativeExit 'rust core native tests'
+            }
+            Write-Host 'RUST_CORE_TESTS_OK'
+          no_output_timeout: 15m
+      - store_test_results:
+          path: .mr-test-results
+      - store_artifacts:
+          path: .mr-test-results
+          destination: rust-core-test-reports
+      - store_artifacts:
+          path: .mr-test-logs
+          destination: rust-core-test-logs
+
+  windows-rust-clipboard-tests:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Calculate vcpkg cache identity
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $manifest = (Get-FileHash -LiteralPath 'vcpkg.json' -Algorithm SHA256).Hash
+            $ports = git rev-parse HEAD:res/vcpkg
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify overlay ports.' }
+            $triplets = git rev-parse HEAD:res/vcpkg-triplets
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify overlay triplets.' }
+            @($manifest,$ports,$triplets) | Set-Content -Encoding ASCII '.mr-vcpkg-cache-key'
+      - restore_cache:
+          keys:
+            - 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
+      - run:
+          name: Prepare pinned Rust LLVM and vcpkg tools
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $root = 'C:\mr-native-tools'
+            New-Item -ItemType Directory -Force $root | Out-Null
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path $vswhere)) { throw 'vswhere is missing.' }
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio 2022 discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 MSVC x64 component is not installed.' }
+            Write-Host "Selected VS 2022: $vs"
+            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            foreach ($path in @("$cmake\cmake.exe","$ninja\ninja.exe")) {
+              if (-not (Test-Path $path)) { throw "Required tool missing: $path" }
+            }
+            $env:Path = "$cmake;$ninja;$env:Path"
+            cmake --version
+            Assert-NativeExit 'CMake version'
+            ninja --version
+            Assert-NativeExit 'Ninja version'
+            $env:CARGO_HOME = Join-Path $root 'cargo'
+            $env:RUSTUP_HOME = Join-Path $root 'rustup'
+            $env:RUSTUP_INIT_SKIP_PATH_CHECK = 'yes'
+            $installer = Join-Path $root 'rustup-init.exe'
+            $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $installer
+            # PowerShell 5.1 may return a byte array for the checksum response.
+            $checksumFile = Join-Path $root 'rustup-init.exe.sha256'
+            Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256" -OutFile $checksumFile
+            $checksumText = Get-Content -LiteralPath $checksumFile -Raw -Encoding ASCII
+            if ($checksumText -notmatch '^\s*([0-9a-fA-F]{64})(?:\s|$)') { throw 'Invalid Rustup SHA256 checksum response.' }
+            $checksum = $Matches[1]
+            $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            if ($actualHash -ine $checksum) { throw 'rustup installer checksum mismatch.' }
+            Write-Host 'RUSTUP_CHECKSUM_OK'
+            & $installer -y --no-modify-path --profile minimal --default-host x86_64-pc-windows-msvc --default-toolchain 1.75.0
+            Assert-NativeExit 'Rustup installation'
+            $env:Path = "$env:CARGO_HOME\bin;$env:Path"
+            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
+            rustup component add rustfmt
+            Assert-NativeExit 'Rustfmt installation'
+            $rustVersion = & rustc --version
+            Assert-NativeExit 'Rust version'
+            Write-Host $rustVersion
+            if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw 'Wrong Rust version.' }
+            cargo --version
+            Assert-NativeExit 'Cargo version'
+            # Match the release used by the successful GitHub Actions Windows build.
+            $llvmInstaller = Join-Path $root 'LLVM-15.0.6-win64.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.6/LLVM-15.0.6-win64.exe' -OutFile $llvmInstaller
+            Write-Host "LLVM installer SHA256: $((Get-FileHash $llvmInstaller -Algorithm SHA256).Hash)"
+            $llvm = Join-Path $root 'llvm'
+            $seven = Get-Command 7z.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            $sevenPath = if ($seven) { $seven.Source } else { 'C:\Program Files\7-Zip\7z.exe' }
+            if (-not (Test-Path $sevenPath)) { throw '7-Zip is required for LLVM extraction.' }
+            & $sevenPath x $llvmInstaller "-o$llvm" -y | Out-Null
+            Assert-NativeExit 'LLVM extraction'
+            $clang = Join-Path $llvm 'bin\clang.exe'
+            if (-not (Test-Path $clang)) { throw 'Clang executable not found in extracted LLVM.' }
+            $env:Path = "$llvm\bin;$env:Path"
+            $env:LIBCLANG_PATH = Join-Path $llvm 'bin'
+            & $clang --version
+            Assert-NativeExit 'Clang version'
+            $vcpkg = Join-Path $root 'vcpkg'
+            $pin = '9e593bb18ea69cc5095e012465dcd675a822ed0d'
+            git init $vcpkg
+            Assert-NativeExit 'vcpkg repository init'
+            git -C $vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+            Assert-NativeExit 'vcpkg remote configuration'
+            git -C $vcpkg fetch --depth 1 origin $pin
+            Assert-NativeExit 'vcpkg pinned revision fetch'
+            git -C $vcpkg checkout --detach FETCH_HEAD
+            Assert-NativeExit 'vcpkg checkout'
+            $actual = & git -C $vcpkg rev-parse HEAD
+            Assert-NativeExit 'vcpkg revision check'
+            if ($actual -ne $pin) { throw 'Wrong vcpkg revision.' }
+            $env:VCPKG_ROOT = $vcpkg
+            $env:VCPKG_DISABLE_METRICS = '1'
+            & "$vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+            Assert-NativeExit 'vcpkg bootstrap'
+            & "$vcpkg\vcpkg.exe" version
+            Assert-NativeExit 'vcpkg version'
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'NATIVE_BOOTSTRAP_OK'
+            # Keep these steps in the same agent and PowerShell process as bootstrap.
+            # The manifest selects historical port versions; shallow history can omit their trees.
+            $shallow = & git -C $vcpkg rev-parse --is-shallow-repository
+            Assert-NativeExit 'vcpkg history check'
+            if ($shallow -eq 'true') {
+              git -C $vcpkg fetch --unshallow origin $pin
+              Assert-NativeExit 'vcpkg historical port fetch'
+            }
+            $cachePath = Join-Path (Get-Location).Path '.mr-vcpkg-binary-cache'
+            New-Item -ItemType Directory -Force $cachePath | Out-Null
+            $restoredFiles = @(Get-ChildItem -LiteralPath $cachePath -File -Recurse)
+            Write-Host "VCPKG_CACHE_FILES_BEFORE_INSTALL=$($restoredFiles.Count)"
+            $env:VCPKG_BINARY_SOURCES = "clear;files,$cachePath,readwrite"
+            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
+            $env:VCPKG_MAX_CONCURRENCY = '4'
+            $installed = Join-Path $vcpkg 'installed'
+            Write-Host "VCPKG_ROOT=$vcpkg"
+            Write-Host "VCPKG_BINARY_CACHE=$cachePath"
+            Write-Host 'Installing the original RustDesk vcpkg manifest (x64-windows-static).'
+            & "$vcpkg\vcpkg.exe" install --triplet x64-windows-static --host-triplet x64-windows-static "--x-install-root=$installed" --clean-after-build
+            Assert-NativeExit 'vcpkg manifest installation'
+            if (-not (Test-Path (Join-Path $installed 'vcpkg\status'))) { throw 'vcpkg installed status missing.' }
+            foreach ($package in @('aom','libjpeg-turbo','opus','libvpx','libyuv','mfx-dispatch','ffmpeg')) {
+              $listFiles = @(Get-ChildItem -Path (Join-Path $installed 'vcpkg\info') -Filter "$($package)_*x64-windows-static.list" -ErrorAction Stop)
+              if ($listFiles.Count -eq 0) { throw "Expected installed package missing: $package" }
+              Write-Host "Installed: $package"
+            }
+            $cacheFiles = @(Get-ChildItem -LiteralPath $cachePath -File -Recurse)
+            $cacheBytes = ($cacheFiles | Measure-Object Length -Sum).Sum
+            if ($cacheFiles.Count -eq 0) { throw 'No binary cache packages found.' }
+            Write-Host "Cache files: $($cacheFiles.Count); size MiB: $([math]::Round($cacheBytes/1MB,2))"
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{N='Free_GiB';E={[math]::Round($_.Free/1GB,2)}} | Format-Table
+            Write-Host 'VCPKG_LIBRARIES_OK (native dependencies only; no application build or tests)'
+          no_output_timeout: 15m
+      - save_cache:
+          key: 'mr-vcpkg-v1-win2022-vs17-x64-static-9e593bb1-{{ checksum ".mr-vcpkg-cache-key" }}'
+          paths:
+            - .mr-vcpkg-binary-cache
+
+      - attach_workspace:
+          at: .mr-bridge-input
+      - run:
+          name: Run rust clipboard tests without distribution build
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $repo = (Get-Location).Path
+            $root = 'C:\mr-native-tools'
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'VS 2022 discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
+            $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+            if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) { throw 'vcvars64.bat missing.' }
+            $devCommand = 'call "' + $vcvars + '" >nul && set'
+            $devEnvironment = & cmd.exe /d /c $devCommand
+            Assert-NativeExit 'MSVC x64 environment initialization'
+            foreach ($line in $devEnvironment) {
+              if ($line -match '^([^=]+)=(.*)$') {
+                [Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')
+              }
+            }
+            $env:CARGO_HOME = Join-Path $root 'cargo'
+            $env:RUSTUP_HOME = Join-Path $root 'rustup'
+            $env:RUSTUP_TOOLCHAIN = '1.75.0-x86_64-pc-windows-msvc'
+            $env:LIBCLANG_PATH = Join-Path $root 'llvm\bin'
+            $env:VCPKG_ROOT = Join-Path $root 'vcpkg'
+            $env:VCPKG_VISUAL_STUDIO_PATH = $vs
+            $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
+            $env:VCPKG_DEFAULT_TRIPLET = 'x64-windows-static'
+            $env:CARGO_BUILD_JOBS = '4'
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            $env:Path = "$env:CARGO_HOME\bin;$env:LIBCLANG_PATH;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
+            $compiler = Get-Command cl.exe -ErrorAction Stop
+            Write-Host "MSVC compiler: $($compiler.Source)"
+            if ($compiler.Source -notlike "$vs\*") { throw 'Unexpected MSVC compiler.' }
+            $rustVersion = & rustc --version
+            Assert-NativeExit 'Rust version'
+            if ($rustVersion -notmatch '^rustc 1\.75\.0 ') { throw "Unexpected Rust version: $rustVersion" }
+            Write-Host $rustVersion
+            git submodule update --init --recursive
+            Assert-NativeExit 'Repository submodules'
+            $files = @(
+              'src/bridge_generated.rs',
+              'src/bridge_generated.io.rs',
+              'flutter/lib/generated_bridge.dart',
+              'flutter/lib/generated_bridge.freezed.dart',
+              'flutter/macos/Runner/bridge_generated.h',
+              'flutter/ios/Runner/bridge_generated.h'
+            )
+            foreach ($file in $files) {
+              $source = Join-Path (Join-Path $repo '.mr-bridge-input') $file
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing bridge workspace file: $file" }
+              if ((Get-Item -LiteralPath $source).Length -le 0) { throw "Empty bridge workspace file: $file" }
+              Copy-Item -LiteralPath $source -Destination (Join-Path $repo $file) -Force
+            }
+            # Match the original build.py Windows sequence and release feature flags.
+            $features = (& python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features | Out-String).Trim()
+            Assert-NativeExit 'Resolve release features'
+            if ($features -notmatch '^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$') { throw "Invalid feature list: $features" }
+            foreach ($feature in @('flutter','hwcodec','vram')) {
+              if (($features -split ',') -notcontains $feature) { throw "Missing required feature: $feature" }
+            }
+            Write-Host "MR_RELEASE_FEATURES=$features"
+            $linker = Join-Path (Split-Path -Parent $compiler.Source) 'link.exe'
+            if (-not (Test-Path -LiteralPath $linker -PathType Leaf)) { throw "MSVC linker missing: $linker" }
+            $env:MR_MSVC_LINKER = $linker
+            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
+            $env:Path = "$(Split-Path -Parent $linker);$env:Path"
+            Write-Host "Selected MSVC linker: $linker"
+            $env:MR_RELEASE_FEATURES = $features
+            $env:PYTHONUTF8 = '1'
+            # Only the test jobs use the lighter release compilation profile.
+            # Production builds keep Cargo.toml's original release profile.
+            $env:CARGO_PROFILE_RELEASE_LTO = 'off'
+            $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16'
+            $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'
+            $env:CARGO_PROFILE_RELEASE_DEBUG = '0'
+            Write-Host 'MR_TEST_PROFILE=release; lto=off; codegen-units=16; opt-level=1'
+            if ('<< pipeline.parameters.smarter_testing >>' -eq 'true') {
+              circleci testsuite doctor 'rust clipboard'
+              Assert-NativeExit 'rust clipboard doctor'
+              circleci testsuite run 'rust clipboard'
+              Assert-NativeExit 'rust clipboard run'
+            } else {
+              $atoms = @(python .circleci/test_runner.py discover rust-clipboard)
+              Assert-NativeExit 'rust clipboard discovery'
+              if ($atoms.Count -eq 0) { throw 'No test atoms discovered.' }
+              python -u .circleci/test_runner.py run rust-clipboard ".mr-test-results/rust-clipboard/junit.xml" @atoms
+              Assert-NativeExit 'rust clipboard native tests'
+            }
+            Write-Host 'RUST_CLIPBOARD_TESTS_OK'
+          no_output_timeout: 15m
+      - store_test_results:
+          path: .mr-test-results
+      - store_artifacts:
+          path: .mr-test-results
+          destination: rust-clipboard-test-reports
+      - store_artifacts:
+          path: .mr-test-logs
+          destination: rust-clipboard-test-logs
+
+  windows-flutter-tests:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .mr-build-input
+      - run:
+          name: Run Flutter tests without Windows distribution build
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            function Assert-NativeExit([string]$action) {
+              if ($LASTEXITCODE -ne 0) { throw "$action failed (exit $LASTEXITCODE)" }
+            }
+            $repo = (Get-Location).Path
+            $workspace = Join-Path $repo '.mr-build-input'
+            $files = @(
+              'src/bridge_generated.rs',
+              'src/bridge_generated.io.rs',
+              'flutter/lib/generated_bridge.dart',
+              'flutter/lib/generated_bridge.freezed.dart',
+              'flutter/macos/Runner/bridge_generated.h',
+              'flutter/ios/Runner/bridge_generated.h'
+            )
+            foreach ($file in $files) {
+              $source = Join-Path $workspace $file
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing workspace input: $file" }
+              if ((Get-Item -LiteralPath $source).Length -le 0) { throw "Empty workspace input: $file" }
+              $destination = Join-Path $repo $file
+              New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+              Copy-Item -LiteralPath $source -Destination $destination -Force
+              Write-Host "Restored: $file"
+            }
+            git submodule update --init --recursive
+            Assert-NativeExit 'Repository submodules'
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            Assert-NativeExit 'Visual Studio discovery'
+            if (-not $vs) { throw 'Visual Studio 2022 x64 is missing.' }
+            $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+            $flutterRoot = 'C:\mr-flutter-release'
+            git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git $flutterRoot
+            Assert-NativeExit 'Flutter release SDK checkout'
+            $env:Path = "$flutterRoot\bin;$cmake;$ninja;C:\Program Files\Git\bin;$env:Path"
+            $env:CI = 'true'
+            $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+            $flutter = Join-Path $flutterRoot 'bin\flutter.bat'
+            $flutterVersion = & $flutter --version | Out-String
+            Assert-NativeExit 'Flutter release SDK initialization'
+            Write-Host $flutterVersion
+            if ($flutterVersion -notmatch 'Flutter 3\.24\.5\b') { throw 'Unexpected Flutter version.' }
+            & $flutter config --no-analytics
+            Assert-NativeExit 'Disable Flutter analytics'
+            & $flutter precache --windows
+            Assert-NativeExit 'Windows engine precache'
+            $patch = Join-Path $repo '.github\patches\flutter_3.24.4_dropdown_menu_enableFilter.diff'
+            git -C $flutterRoot apply --check $patch
+            Assert-NativeExit 'Flutter release patch compatibility'
+            git -C $flutterRoot apply $patch
+            Assert-NativeExit 'Apply Flutter release patch'
+            Write-Host 'FLUTTER_TEST_SDK_AND_PATCH_OK'
+            Push-Location (Join-Path $repo 'flutter')
+            try {
+              & $flutter pub get
+              Assert-NativeExit 'Flutter release dependencies'
+            } finally { Pop-Location }
+            $env:PYTHONUTF8 = '1'
+            if ('<< pipeline.parameters.smarter_testing >>' -eq 'true') {
+              circleci testsuite doctor 'flutter tests'
+              Assert-NativeExit 'flutter tests doctor'
+              circleci testsuite run 'flutter tests'
+              Assert-NativeExit 'flutter tests run'
+            } else {
+              $atoms = @(python .circleci/test_runner.py discover flutter)
+              Assert-NativeExit 'flutter tests discovery'
+              if ($atoms.Count -eq 0) { throw 'No test atoms discovered.' }
+              python -u .circleci/test_runner.py run flutter ".mr-test-results/flutter/junit.xml" @atoms
+              Assert-NativeExit 'flutter tests native tests'
+            }
+            Write-Host 'FLUTTER_AUTOMATED_TESTS_OK'
+          no_output_timeout: 15m
+      - store_test_results:
+          path: .mr-test-results
+      - store_artifacts:
+          path: .mr-test-results
+          destination: flutter-test-reports
+      - store_artifacts:
+          path: .mr-test-logs
+          destination: flutter-test-logs
+
 workflows:
-  starter:
+  validate:
+    unless: << pipeline.parameters.build_distribution >>
     jobs:
-      - windows-diagnostic
-      - windows-toolchain-probe:
-          requires:
-            - windows-diagnostic
-      - windows-native-bootstrap:
-          requires:
-            - windows-toolchain-probe
-      - windows-core-build:
+      - windows-native-bootstrap
+      - windows-rust-core-tests:
           requires:
             - windows-native-bootstrap
+      - windows-rust-clipboard-tests:
+          requires:
+            - windows-native-bootstrap
+      - windows-flutter-tests:
+          requires:
+            - windows-native-bootstrap
+  release-candidate:
+    when: << pipeline.parameters.build_distribution >>
+    jobs:
+      - windows-native-bootstrap
+      - windows-rust-core-tests:
+          requires:
+            - windows-native-bootstrap
+      - windows-rust-clipboard-tests:
+          requires:
+            - windows-native-bootstrap
+      - windows-flutter-tests:
+          requires:
+            - windows-native-bootstrap
+      - windows-core-build:
+          requires:
+            - windows-rust-core-tests
+            - windows-rust-clipboard-tests
+            - windows-flutter-tests
       - windows-flutter-build:
           requires:
             - windows-core-build

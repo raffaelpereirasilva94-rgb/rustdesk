@@ -44,10 +44,19 @@ def stream(command, cwd, env=None):
     )
     lines = []
     assert proc.stdout is not None
-    for line in proc.stdout:
-        print(line, end="", flush=True)
-        lines.append(line.rstrip("\r\n"))
-    return proc.wait(), lines
+    live_path = os.environ.get("MR_TEST_LIVE_LOG")
+    log = Path(live_path).open("w", encoding="utf-8") if live_path else None
+    try:
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            if log:
+                log.write(line)
+                log.flush()
+            lines.append(line.rstrip("\r\n"))
+        return proc.wait(), lines
+    finally:
+        if log:
+            log.close()
 
 
 def clean(text):
@@ -223,6 +232,10 @@ def main():
     # omitted. This avoids Bash consuming backslashes in Windows file paths.
     raw_atoms = sys.argv[4:] if len(sys.argv) > 4 else sys.stdin.read().splitlines()
     atoms = list(dict.fromkeys(a.strip().replace("\\", "/").removeprefix("./") for a in raw_atoms if a.strip()))
+    logs = ROOT / ".mr-test-logs" / suite
+    logs.mkdir(parents=True, exist_ok=True)
+    log_path = logs / (path.stem + ".log")
+    os.environ["MR_TEST_LIVE_LOG"] = str(log_path)
     try:
         if not atoms or not set(atoms).issubset(known):
             raise RuntimeError(f"Unexpected or empty selected atoms: {atoms!r}")
@@ -232,9 +245,6 @@ def main():
         print(message, file=sys.stderr, flush=True)
         rc, records, lines = 1, [problem(a, message) for a in (atoms or known)], [message]
     # Keep the complete native output outside the JUnit directory, including doctor runs.
-    logs = ROOT / ".mr-test-logs" / suite
-    logs.mkdir(parents=True, exist_ok=True)
-    log_path = logs / (path.stem + ".log")
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     write_junit(path, suite, records, lines)
     if rc:
