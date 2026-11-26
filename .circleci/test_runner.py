@@ -162,15 +162,55 @@ def path_to_atom(path, atoms):
     return None
 
 
+def flutter_platform(atom):
+    # Library-level @TestOn('browser') is not selected by the default VM.
+    source = (ROOT / atom).read_text(encoding="utf-8-sig")
+    if re.search(r"""(?m)^\s*@TestOn\(\s*['"]browser['"]\s*\)""", source):
+        return "chrome"
+    return "vm"
+
+
 def run_flutter(atoms):
     tool = shutil.which("flutter.bat") or shutil.which("flutter")
     if not tool:
         raise RuntimeError("Flutter SDK not configured")
-    command = [tool, "test", "--machine", "--timeout", "60s", "--no-pub"]
-    command += [a.removeprefix("flutter/") for a in atoms]
-    rc, lines = stream(command, ROOT / "flutter")
+    records, output = [], []
+    rc = 0
+    for platform in ("vm", "chrome"):
+        selected = [a for a in atoms if flutter_platform(a) == platform]
+        if not selected:
+            continue
+        print(f"MR_FLUTTER_PLATFORM={platform}; files={len(selected)}", flush=True)
+        command = [tool, "test", "--platform", platform, "--machine", "--timeout", "60s", "--no-pub"]
+        command += [a.removeprefix("flutter/") for a in selected]
+        try:
+            env = os.environ.copy()
+            if env.get("MR_TEST_LIVE_LOG"):
+                base = Path(env["MR_TEST_LIVE_LOG"])
+                env["MR_TEST_LIVE_LOG"] = str(base.with_name(base.stem + "-" + platform + base.suffix))
+                # stream reads the process environment for its live log location.
+                previous = os.environ["MR_TEST_LIVE_LOG"]
+                os.environ["MR_TEST_LIVE_LOG"] = env["MR_TEST_LIVE_LOG"]
+            else:
+                previous = None
+            try:
+                native_rc, lines = stream(command, ROOT / "flutter", env=env)
+            finally:
+                if previous is not None:
+                    os.environ["MR_TEST_LIVE_LOG"] = previous
+            result_rc, result, _ = parse_flutter(selected, native_rc, lines)
+        except Exception as exc:
+            result_rc, result, lines = 1, [problem(a, str(exc)) for a in selected], [str(exc)]
+        records.extend(result)
+        output.extend([f"=== Flutter {platform} ===", *lines])
+        rc = rc or result_rc
+    return rc, records, output
+
+
+def parse_flutter(atoms, rc, lines):
     suites, tests, errors, records = {}, {}, {}, []
     done = set()
+    completed = False
     for line in lines:
         try:
             event = json.loads(line)
@@ -179,7 +219,9 @@ def run_flutter(atoms):
         if not isinstance(event, dict):
             continue
         kind = event.get("type")
-        if kind == "suite":
+        if kind == "done":
+            completed = event.get("success") is True
+        elif kind == "suite":
             s = event["suite"]
             suites[s["id"]] = path_to_atom(s.get("path"), atoms)
         elif kind == "testStart":
@@ -207,7 +249,10 @@ def run_flutter(atoms):
                 "time": max(0, event.get("time", start) - start) / 1000,
                 "message": "\n".join(errors.get(tid, [])),
             })
-    reported = {r["atom"] for r in records}
+    if not completed:
+        records.append(problem(atoms[0], "Flutter did not report successful suite completion"))
+        rc = rc or 1
+    reported = {r["atom"] for r in records if r["name"] != "test runner error"}
     for atom in atoms:
         if atom not in reported:
             records.append(problem(atom, "No test result reported for selected file"))
