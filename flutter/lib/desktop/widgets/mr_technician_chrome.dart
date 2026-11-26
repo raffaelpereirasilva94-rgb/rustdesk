@@ -17,6 +17,43 @@ bool mrDeskSameSessions(List<MrDeskSession> a, List<MrDeskSession> b) {
   return true;
 }
 
+// Draft tabs contain only user-entered destination IDs; they never own or
+// close an active connection. Native remote sessions have separate lifetimes.
+class MrDeskDrafts {
+  final List<String> _values = [''];
+  int _selected = 0;
+  int get selected => _selected;
+  int get length => _values.length;
+
+  void save(String value) => _values[_selected] = value;
+
+  String open(String current) {
+    save(current);
+    _values.add('');
+    _selected = _values.length - 1;
+    return '';
+  }
+
+  String select(int index, String current) {
+    if (index < 0 || index >= length) return current;
+    save(current);
+    _selected = index;
+    return _values[_selected];
+  }
+
+  String close(int index, String current) {
+    if (index <= 0 || index >= length) return current;
+    save(current);
+    _values.removeAt(index);
+    if (_selected == index) {
+      _selected = index - 1;
+    } else if (_selected > index) {
+      _selected--;
+    }
+    return _values[_selected];
+  }
+}
+
 // All device sections use the same width and aspect ratio. A short list
 // never grows its cards to fill the unused columns.
 double mrDeskCardWidth(double available) {

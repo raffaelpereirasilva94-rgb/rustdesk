@@ -43,8 +43,7 @@ class MrTechnicianPanel extends StatefulWidget {
 class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListener {
   final _id = IDTextEditingController();
   final _idFocus = FocusNode();
-  final _drafts = <String>[''];
-  int _draftIndex = 0;
+  final _drafts = MrDeskDrafts();
   List<MrDeskSession> _sessions = [];
   bool _readingSessions = false;
   Timer? _sessionTimer;
@@ -145,34 +144,15 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   }
   // Keep independent connection drafts; opening one never closes a native session.
   void _newDraft() {
-    setState(() {
-      _drafts[_draftIndex] = _id.text;
-      _drafts.add('');
-      _draftIndex = _drafts.length - 1;
-      _id.clear();
-    });
+    setState(() => _id.text = _drafts.open(_id.text));
     _idFocus.requestFocus();
   }
   void _selectDraft(int index) {
-    setState(() {
-      _drafts[_draftIndex] = _id.text;
-      _draftIndex = index;
-      _id.text = _drafts[index];
-    });
+    setState(() => _id.text = _drafts.select(index, _id.text));
     _idFocus.requestFocus();
   }
   void _closeDraft(int index) {
-    if (index == 0) return;
-    setState(() {
-      _drafts[_draftIndex] = _id.text;
-      _drafts.removeAt(index);
-      if (_draftIndex == index) {
-        _draftIndex = index - 1;
-      } else if (_draftIndex > index) {
-        _draftIndex--;
-      }
-      _id.text = _drafts[_draftIndex];
-    });
+    setState(() => _id.text = _drafts.close(index, _id.text));
   }
 
   // Native remote windows remain the owners of the live sessions. The
@@ -228,7 +208,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   void _connect() {
     if (bind.isIncomingOnly() || _id.id.isEmpty) return;
     FocusScope.of(context).unfocus();
-    _drafts[_draftIndex] = _id.text;
+    _drafts.save(_id.text);
     connect(context, _id.id);
   }
   Future<void> _toggleFavorite(Peer peer) async {
@@ -320,29 +300,51 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
         const MrDeskWordmark(),
         const SizedBox(width: 14),
         Container(width: 1, height: 23, color: _border),
-        Expanded(child: Row(children: [
-          Flexible(child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              for (int i = 0; i < _drafts.length; i++)
-                _sessionTab(
-                  'Nova sessão',
-                  selected: i == _draftIndex,
-                  onTap: () => _selectDraft(i),
-                  onClose: i == 0 ? null : () => _closeDraft(i),
-                ),
-              for (final session in _sessions)
-                _sessionTab(formatID(session.peerId),
-                  selected: false, onTap: () => _activateSession(session)),
+        Expanded(child: LayoutBuilder(builder: (context, constraints) {
+          // Keep the plus button accessible even when many tabs are open.
+          final primaryWidth = (constraints.maxWidth - 36)
+              .clamp(0.0, 132.0).toDouble();
+          return Row(children: [
+            SizedBox(
+              width: primaryWidth,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: _sessionTab('Nova sessão',
+                  selected: _drafts.selected == 0,
+                  onTap: () => _selectDraft(0)),
+              ),
+            ),
+            if (constraints.maxWidth >= 36)
               _chromeButton('Nova sessão', Icons.add_to_queue_outlined, _newDraft),
-            ]),
-          )),
-          Expanded(child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanStart: (_) => windowManager.startDragging(),
-            child: const SizedBox.expand(),
-          )),
-        ])),
+            Expanded(child: LayoutBuilder(builder: (context, space) {
+              return Row(children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: (space.maxWidth - 16).clamp(0.0, space.maxWidth).toDouble()),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      for (int i = 1; i < _drafts.length; i++)
+                        _sessionTab('Nova sessão',
+                          selected: i == _drafts.selected,
+                          onTap: () => _selectDraft(i),
+                          onClose: () => _closeDraft(i)),
+                      for (final session in _sessions)
+                        _sessionTab(formatID(session.peerId),
+                          selected: false,
+                          onTap: () => _activateSession(session)),
+                    ]),
+                  ),
+                ),
+                Expanded(child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanStart: (_) => windowManager.startDragging(),
+                  child: const SizedBox.expand(),
+                )),
+              ]);
+            })),
+          ]);
+        })),
         if (!kUseCompatibleUiMode) ...[
           _chromeButton('Minimizar', Icons.remove, () => windowManager.minimize()),
           Obx(() => _chromeButton(

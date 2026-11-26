@@ -503,7 +503,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       return jumpOk;
     } else if (call.method == mrDeskRemoteTabsMethod) {
       // Read-only IPC from the main window: no credentials or screen contents.
-      if (fromWindowId != kMainWindowId) return null;
+      if (!(const bool.fromEnvironment('MR_TECHNICIAN_PREVIEW')) ||
+          fromWindowId != kMainWindowId) return null;
       return jsonEncode(tabController.state.value.tabs.map((e) => e.key).toList());
     } else if (call.method == kWindowEventGetRemoteList) {
       return tabController.state.value.tabs

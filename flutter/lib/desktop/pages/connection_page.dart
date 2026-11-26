@@ -42,6 +42,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   final _svcIsUsingPublicServer = true.obs;
   Timer? _updateTimer;
   final _mrStatusNum = Rxn<int>();
+  final _mrPublicServer = Rxn<bool>();
   bool _mrStatusPending = false;
 
   double get em => 14.0;
@@ -75,7 +76,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
     if (widget.mrTechnicianLayout) {
       return Obx(() => MrDeskServerIndicator(
         status: mrDeskServerState(_mrStatusNum.value, stopped: _svcStopped.value),
-        publicServer: _svcIsUsingPublicServer.value,
+        publicServer: _mrPublicServer.value == true,
       ));
     }
     if (widget.mrClientLayout) {
@@ -243,10 +244,13 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
         if (count is int) stateGlobal.videoConnCount.value = count;
         try {
           final isPublic = await bind.mainIsUsingPublicServer().timeout(const Duration(seconds: 2));
-          if (mounted) _svcIsUsingPublicServer.value = isPublic;
-        } catch (_) {}
+          if (mounted) _mrPublicServer.value = isPublic;
+        } catch (_) {
+          if (mounted) _mrPublicServer.value = null;
+        }
       } catch (_) {
         if (mounted) {
+          _mrPublicServer.value = null;
           _mrStatusNum.value = null;
           stateGlobal.svcStatus.value = SvcStatus.notReady;
         }

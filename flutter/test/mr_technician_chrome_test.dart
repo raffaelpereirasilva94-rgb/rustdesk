@@ -20,6 +20,18 @@ void main() {
     }
     expect(mrDeskCardWidth(0), 0);
   });
+  test('new session drafts retain their own IDs when switched or closed', () {
+    final drafts = MrDeskDrafts();
+    expect(drafts.open('123'), '');
+    expect(drafts.length, 2);
+    expect(drafts.selected, 1);
+    expect(drafts.select(0, '456'), '123');
+    expect(drafts.select(1, '789'), '456');
+    expect(drafts.close(0, '456'), '456');
+    expect(drafts.close(1, '456'), '789');
+    expect(drafts.length, 1);
+    expect(drafts.selected, 0);
+  });
   test('session list identity includes native window and peer', () {
     const first = [MrDeskSession(1, '123')];
     expect(mrDeskSameSessions(first, const [MrDeskSession(1, '123')]), isTrue);
