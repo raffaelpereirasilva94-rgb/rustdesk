@@ -52,12 +52,18 @@ void main() {
     expect((span.children![1] as TextSpan).style!.color, const Color(0xFFFCFCFC));
   });
   testWidgets('wordmark and technician palette follow light and dark themes', (tester) async {
-    for (final brightness in Brightness.values) {
+    for (final brightness in [Brightness.dark, Brightness.light, Brightness.dark]) {
       final dark = brightness == Brightness.dark;
       await tester.pumpWidget(MaterialApp(
-        theme: ThemeData(brightness: brightness),
+        theme: ThemeData.light(),
+        darkTheme: ThemeData.dark(),
+        themeMode: dark ? ThemeMode.dark : ThemeMode.light,
         home: const Scaffold(body: MrDeskWordmark()),
       ));
+      // MaterialApp animates theme changes. Assert only after the transition.
+      await tester.pumpAndSettle();
+      expect(Theme.of(tester.element(find.byType(MrDeskWordmark))).brightness,
+          brightness);
       final text = tester.widget<Text>(find.descendant(
         of: find.byType(MrDeskWordmark), matching: find.byType(Text)));
       final span = text.textSpan as TextSpan;
