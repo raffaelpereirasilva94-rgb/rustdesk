@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 
 const mrDeskRemoteTabsMethod = 'mrdesk_remote_tabs_v1';
 
@@ -18,17 +17,25 @@ bool mrDeskSameSessions(List<MrDeskSession> a, List<MrDeskSession> b) {
   return true;
 }
 
-/// Opens a connection prompt, not a synthetic session tab. Only a submitted
-/// non-empty destination is handed to the existing native connection flow.
+// A new home window has no remote ID or credentials in its launch payload.
+const mrDeskHomeWindowKey = 'mrdesk_home_window_v1';
+const mrDeskHomeOpenMethod = 'mrdesk_home_open_v1';
+const mrDeskHomeCloseMethod = 'mrdesk_home_close_v1';
+const mrDeskHomeSnapshotMethod = 'mrdesk_home_snapshot_v1';
+const mrDeskHomeSettingsMethod = 'mrdesk_home_settings_v1';
+
+Map<String, dynamic> mrDeskHomeWindowArguments() => {mrDeskHomeWindowKey: true};
+String mrDeskHomeEventChannel(int windowId) => 'mrdesk-home-$windowId';
+
 class MrDeskNewSessionButton extends StatelessWidget {
   const MrDeskNewSessionButton({
     super.key,
     required this.enabled,
-    required this.onConnect,
+    required this.onOpen,
   });
 
   final bool enabled;
-  final Future<void> Function(String id) onConnect;
+  final Future<void> Function() onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -40,75 +47,7 @@ class MrDeskNewSessionButton extends StatelessWidget {
       constraints: const BoxConstraints.tightFor(width: 36, height: 34),
       icon: Icon(Icons.add_to_queue_outlined, size: 19,
           color: enabled ? palette.foreground : palette.border),
-      onPressed: !enabled ? null : () async {
-        final id = await showDialog<String>(
-          context: context,
-          builder: (_) => const _MrDeskNewSessionDialog(),
-        );
-        if (!context.mounted || id == null || id.isEmpty) return;
-        await onConnect(id);
-      },
-    );
-  }
-}
-
-class _MrDeskNewSessionDialog extends StatefulWidget {
-  const _MrDeskNewSessionDialog();
-
-  @override
-  State<_MrDeskNewSessionDialog> createState() => _MrDeskNewSessionDialogState();
-}
-
-class _MrDeskNewSessionDialogState extends State<_MrDeskNewSessionDialog> {
-  final _destination = IDTextEditingController();
-  bool _submitted = false;
-
-  @override
-  void dispose() {
-    _destination.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final id = _destination.id;
-    if (_submitted || id.isEmpty) return;
-    _submitted = true;
-    Navigator.of(context).pop(id);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Nova sessão'),
-      content: SizedBox(
-        width: 360,
-        child: TextField(
-          controller: _destination,
-          autofocus: true,
-          inputFormatters: [IDTextInputFormatter()],
-          autocorrect: false,
-          enableSuggestions: false,
-          textInputAction: TextInputAction.go,
-          decoration: const InputDecoration(
-            labelText: 'ID ou endereço remoto',
-            hintText: 'Digite o ID ou endereço remoto',
-          ),
-          onSubmitted: (_) => _submit(),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: _destination,
-          builder: (context, value, _) => ElevatedButton(
-            onPressed: _destination.id.isEmpty ? null : _submit,
-            child: const Text('Conectar'),
-          ),
-        ),
-      ],
+      onPressed: enabled ? onOpen : null,
     );
   }
 }

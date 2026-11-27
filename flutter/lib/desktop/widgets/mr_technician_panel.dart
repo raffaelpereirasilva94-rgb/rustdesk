@@ -9,6 +9,7 @@ import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_windows.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
@@ -27,7 +28,9 @@ const _green = Color(0xFF19E53C);
 
 class MrTechnicianPanel extends StatefulWidget {
   const MrTechnicianPanel({super.key, required this.systemError,
-    required this.securityWarning, required this.status, required this.onSettings});
+    required this.securityWarning, required this.status, required this.onSettings,
+    this.technicianWindowId});
+  final int? technicianWindowId;
   final String systemError;
   final Widget securityWarning, status;
   final VoidCallback? onSettings;
@@ -48,6 +51,9 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   final _idFocus = FocusNode();
   List<MrDeskSession> _sessions = [];
   bool _readingSessions = false;
+  bool _openingWindow = false;
+  bool get _secondary => widget.technicianWindowId != null;
+  bool get _onHome => _secondary || isInHomePage();
   Timer? _sessionTimer;
   late final _recent = gFFI.recentPeersModel;
   late final _favorites = gFFI.favoritePeersModel;
@@ -64,7 +70,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
+    if (!_secondary) windowManager.addListener(this);
     final available = [0, 1, 2].where(_visible).toList();
     if (available.isNotEmpty) _selected = available.first;
     if (isOptionFixed(kOptionPeerTabIndex) && available.contains(_tabs.currentTab)) {
@@ -78,10 +84,15 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     });
     _timer = Timer.periodic(const Duration(seconds: 6), (_) => _poll());
     _sessionTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (_active && isInHomePage()) _refreshSessions();
+      if (_active && _onHome) _refreshSessions();
     });
   }
   void _reload() {
+    if (_secondary) {
+      _refreshSessions();
+      _refreshFavorites();
+      return;
+    }
     if (_visible(0)) bind.mainLoadRecentPeers();
     if (_visible(1)) bind.mainLoadFavPeers();
     if (_visible(2)) {
@@ -100,11 +111,11 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     }
   }
   Future<void> _poll() async {
-    if (!mounted || !_active || !isInHomePage() || _querying) return;
+    if (_secondary || !mounted || !_active || !_onHome || _querying) return;
     _querying = true;
     try {
       final publicServer = await bind.mainIsUsingPublicServer();
-      if (!mounted || !_active || !isInHomePage()) return;
+      if (!mounted || !_active || !_onHome) return;
       if (DateTime.now().difference(_lastQuery) < Duration(seconds: publicServer ? 20 : 6)) return;
       final ids = <String>{
         if (_visible(0)) ..._recent.peers.map((p) => p.id),
@@ -124,7 +135,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
   @override
   void onWindowFocus() {
     _active = true;
-    if (mounted && isInHomePage()) { _reload(); _refreshSessions(); }
+    if (mounted && _onHome) { _reload(); _refreshSessions(); }
   }
   @override
   void onWindowBlur() { _active = false; }
@@ -135,7 +146,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     _timer?.cancel();
     _sessionTimer?.cancel();
     _idFocus.dispose();
-    windowManager.removeListener(this);
+    if (!_secondary) windowManager.removeListener(this);
     _favorites.removeListener(_refreshFavorites);
     if (Get.isRegistered<IDTextEditingController>() &&
         identical(Get.find<IDTextEditingController>(), _id)) {
@@ -150,29 +161,38 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     if (!mounted || _readingSessions) return;
     _readingSessions = true;
     try {
-      final ids = rustDeskWinManager.getActiveWindows()
-          .where((id) => id != kMainWindowId).toList();
-      final groups = await Future.wait(ids.map((windowId) async {
-        try {
-          final result = await DesktopMultiWindow.invokeMethod(
-              windowId, mrDeskRemoteTabsMethod, null)
-              .timeout(const Duration(seconds: 2));
-          if (result is! String) return <MrDeskSession>[];
-          final peers = jsonDecode(result);
-          if (peers is! List) return <MrDeskSession>[];
-          return peers.whereType<String>().where((id) => id.isNotEmpty)
-              .map((id) => MrDeskSession(windowId, id)).toList();
-        } catch (_) {
-          // Other window types do not expose remote desktop tabs.
-          return <MrDeskSession>[];
+      if (_secondary) {
+        final raw = await DesktopMultiWindow.invokeMethod(
+            kMainWindowId, mrDeskHomeSnapshotMethod, null)
+            .timeout(const Duration(seconds: 5));
+        if (!mounted || raw is! String) return;
+        final snapshot = jsonDecode(raw) as Map<String, dynamic>;
+        List<Peer> peers(String key) => (snapshot[key] as List)
+            .map((item) {
+              final data = Map<String, dynamic>.from(item as Map);
+              return Peer.fromJson(data)..online = data['online'] == true;
+            }).toList();
+        final mode = MyTheme.currentThemeMode();
+        final brightness = Theme.of(context).brightness;
+        if ((mode == ThemeMode.dark) != (brightness == Brightness.dark)) {
+          Get.changeThemeMode(mode);
         }
-      }));
-      final current = rustDeskWinManager.getActiveWindows();
-      final next = groups.expand((group) => group)
-          .where((session) => current.contains(session.windowId)).toList();
+        setState(() {
+          _recent.peers = peers('recent');
+          _favorites.peers = peers('favorites');
+          _lan.peers = peers('lan');
+          _favoriteIds = _favorites.peers.map((p) => p.id).toSet();
+          _sessions = (snapshot['sessions'] as List).map((item) =>
+              MrDeskSession(item['windowId'] as int, item['peerId'] as String)).toList();
+        });
+        return;
+      }
+      final next = await readMrDeskRemoteSessions();
       if (mounted && !mrDeskSameSessions(_sessions, next)) {
         setState(() => _sessions = next);
       }
+    } catch (e) {
+      debugPrint('MR session snapshot: $e');
     } finally {
       _readingSessions = false;
     }
@@ -194,10 +214,27 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     }
   }
 
+  Future<void> _newWindow() async {
+    if (_openingWindow || bind.isIncomingOnly()) return;
+    setState(() => _openingWindow = true);
+    try {
+      final ok = _secondary
+          ? await DesktopMultiWindow.invokeMethod(
+              kMainWindowId, mrDeskHomeOpenMethod, null) == true
+          : await openMrDeskHomeWindow();
+      if (!ok && mounted) showToast('Não foi possível abrir uma nova janela.');
+    } catch (e) {
+      debugPrint('MR new window: $e');
+      if (mounted) showToast('Não foi possível abrir uma nova janela.');
+    } finally {
+      if (mounted) setState(() => _openingWindow = false);
+    }
+  }
+
   void _connect() => _connectTo(_id.id);
 
-  // Use the same native connection path for the main field and new-session
-  // dialog. The native remote window manager owns session creation and tabs.
+  // The native remote window manager owns session creation and tabs.
+  // In secondary homes connect() forwards to the sole main dispatcher.
   Future<void> _connectTo(String id) async {
     if (!mounted || bind.isIncomingOnly() || id.isEmpty) return;
     FocusScope.of(context).unfocus();
@@ -316,8 +353,8 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
             ),
             if (constraints.maxWidth >= 36)
               MrDeskNewSessionButton(
-                enabled: !bind.isIncomingOnly(),
-                onConnect: _connectTo,
+                enabled: !bind.isIncomingOnly() && !_openingWindow,
+                onOpen: _newWindow,
               ),
             Expanded(child: LayoutBuilder(builder: (context, space) {
               return Row(children: [
@@ -336,14 +373,20 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                 ),
                 Expanded(child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onPanStart: (_) => windowManager.startDragging(),
+                  onPanStart: (_) {
+                    if (_secondary) {
+                      WindowController.fromWindowId(widget.technicianWindowId!).startDragging();
+                    } else {
+                      windowManager.startDragging();
+                    }
+                  },
                   child: const SizedBox.expand(),
                 )),
               ]);
             })),
           ]);
         })),
-        if (!kUseCompatibleUiMode) ...[
+        if (!_secondary && !kUseCompatibleUiMode) ...[
           _chromeButton('Minimizar', Icons.remove, () => windowManager.minimize()),
           Obx(() => _chromeButton(
             stateGlobal.isMaximized.value ? 'Restaurar' : 'Maximizar',
@@ -368,6 +411,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
           Expanded(child: TextField(
             controller: _id,
             focusNode: _idFocus,
+            autofocus: _secondary,
             inputFormatters: [IDTextInputFormatter()],
             autocorrect: false,
             enableSuggestions: false,

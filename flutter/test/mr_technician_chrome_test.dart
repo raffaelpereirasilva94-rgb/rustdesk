@@ -20,54 +20,38 @@ void main() {
     }
     expect(mrDeskCardWidth(0), 0);
   });
-  testWidgets('new session prompts for an ID and only submits real destinations',
+  testWidgets('new session requests a separate home window on each click',
       (tester) async {
-    final requested = <String>[];
+    var opened = 0;
     await tester.pumpWidget(MaterialApp(home: Scaffold(body:
-      MrDeskNewSessionButton(enabled: true,
-        onConnect: (id) async { requested.add(id); }),
+      MrDeskNewSessionButton(enabled: true, onOpen: () async { opened++; }),
     )));
     final button = find.byTooltip('Nova sessão');
-    final connect = find.widgetWithText(ElevatedButton, 'Conectar');
     await tester.tap(button);
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
-    expect(tester.widget<ElevatedButton>(connect).onPressed, isNull);
-    await tester.tap(find.text('Cancelar'));
-    await tester.pumpAndSettle();
+    expect(opened, 1);
     expect(find.byType(AlertDialog), findsNothing);
-    expect(requested, isEmpty);
-
+    expect(find.byType(TextField), findsNothing);
     await tester.tap(button);
     await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, isEmpty);
-    await tester.enterText(find.byType(TextField), '123456789');
-    await tester.pumpAndSettle();
-    await tester.tap(connect);
-    await tester.pumpAndSettle();
-    expect(requested, ['123456789']);
-    expect(find.byType(AlertDialog), findsNothing);
-
-    await tester.tap(button);
-    await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, isEmpty);
-    await tester.enterText(find.byType(TextField), '987654321');
-    await tester.testTextInput.receiveAction(TextInputAction.go);
-    await tester.pumpAndSettle();
-    expect(requested, ['123456789', '987654321']);
+    expect(opened, 2);
     expect(find.byType(AlertDialog), findsNothing);
   });
   testWidgets('new session is disabled when outgoing connections are restricted',
       (tester) async {
-    var requested = false;
+    var opened = false;
     await tester.pumpWidget(MaterialApp(home: Scaffold(body:
-      MrDeskNewSessionButton(enabled: false,
-        onConnect: (_) async { requested = true; }),
+      MrDeskNewSessionButton(enabled: false, onOpen: () async { opened = true; }),
     )));
-    final button = find.byType(IconButton);
-    expect(tester.widget<IconButton>(button).onPressed, isNull);
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(requested, isFalse);
+    expect(tester.widget<IconButton>(find.byType(IconButton)).onPressed, isNull);
+    expect(opened, isFalse);
+  });
+  test('independent home launch has no destination and isolates event channels', () {
+    expect(mrDeskHomeWindowArguments(), {mrDeskHomeWindowKey: true});
+    expect(mrDeskHomeWindowArguments().containsKey('id'), isFalse);
+    expect(mrDeskHomeWindowArguments().containsKey('password'), isFalse);
+    expect(mrDeskHomeEventChannel(1), isNot(mrDeskHomeEventChannel(2)));
+    expect(mrDeskHomeEventChannel(1), isNot('main'));
   });
   test('session list identity includes native window and peer', () {
     const first = [MrDeskSession(1, '123')];

@@ -1878,11 +1878,11 @@ jobs:
               $blocked | ForEach-Object { Write-Host "BLOCKED_PREVIEW_PATH=$_" }
               throw 'Changes outside visual preview scope. Use full release-candidate workflow.'
             }
-            # Only the reviewed main.dart window-startup change is allowed.
+            # Only the reviewed main.dart window-startup and MRDesk home-window route are allowed.
             # Any further change to this entry point requires a fresh review.
             if ($changes -ccontains 'flutter/lib/main.dart') {
               $mainBlob = git rev-parse 'HEAD:flutter/lib/main.dart'
-              if ($LASTEXITCODE -ne 0 -or $mainBlob -cne 'b1a20afc8c79d8adb2314b7c975fa4d06a89e9d5') {
+              if ($LASTEXITCODE -ne 0 -or $mainBlob -cne '1a11c3fd17bfe9f6df7f525157b479fb1cd2a4db') {
                 throw 'Unreviewed main.dart change. Use full release-candidate workflow.'
               }
             }

@@ -14,6 +14,8 @@ import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_technician_panel.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_windows.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -28,7 +30,8 @@ import 'package:window_size/window_size.dart' as window_size;
 import '../widgets/button.dart';
 
 class DesktopHomePage extends StatefulWidget {
-  const DesktopHomePage({Key? key}) : super(key: key);
+  const DesktopHomePage({Key? key, this.technicianWindowId}) : super(key: key);
+  final int? technicianWindowId;
 
   @override
   State<DesktopHomePage> createState() => _DesktopHomePageState();
@@ -76,8 +79,11 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         securityWarning: bind.isOutgoingOnly()
             ? const SizedBox.shrink() : buildPresetPasswordWarning(),
         status: const OnlineStatusWidget(mrTechnicianLayout: true),
-        onSettings: bind.isDisableSettings()
-            ? null : () => DesktopTabPage.onAddSetting(),
+        technicianWindowId: widget.technicianWindowId,
+        onSettings: bind.isDisableSettings() ? null :
+            widget.technicianWindowId != null
+              ? () => showMrDeskMainSettings()
+              : () => DesktopTabPage.onAddSetting(),
       ));
     }
     final isIncomingOnly = bind.isIncomingOnly();
@@ -724,11 +730,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
+      if (!mounted) return;
       if (systemError != error) {
         systemError = error;
         setState(() {});
       }
       final v = await mainGetBoolOption(kOptionStopService);
+      if (!mounted) return;
       if (v != svcStopped.value) {
         svcStopped.value = v;
         setState(() {});
@@ -771,6 +779,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       }
     });
     Get.put<RxBool>(svcStopped, tag: 'stop-service');
+    if (widget.technicianWindowId != null) {
+      // Secondary homes never replace the primary dispatcher or subscribe to
+      // the single native main event stream / global URI listener.
+      WidgetsBinding.instance.addObserver(this);
+      return;
+    }
     rustDeskWinManager.registerActiveWindowListener(onActiveWindowChanged);
 
     screenToMap(window_size.Screen screen) => {
@@ -801,6 +815,14 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       if (!isChattyMethod(call.method)) {
         debugPrint(
           "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+      }
+      if (useMrTechnicianLayout &&
+          isMrDeskHomeMethod(call.method)) {
+        return handleMrDeskHomeMethod(call, fromWindowId);
+      }
+      if (isMrDeskHomeWindow(fromWindowId) &&
+          call.method == kWindowConnect && bind.isIncomingOnly()) {
+        return false;
       }
       if (call.method == kWindowMainWindowOnTop) {
         windowOnTop(null);

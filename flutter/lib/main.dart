@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/overlay.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_windows.dart';
+import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
 import 'package:flutter_hbb/desktop/pages/install_page.dart';
 import 'package:flutter_hbb/desktop/pages/server_page.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_file_transfer_screen.dart';
@@ -56,6 +58,28 @@ Future<void> main(List<String> args) async {
     final argument = args[2].isEmpty
         ? <String, dynamic>{}
         : jsonDecode(args[2]) as Map<String, dynamic>;
+    if (isWindows &&
+        const bool.fromEnvironment('MR_TECHNICIAN_PREVIEW') &&
+        argument[mrDeskHomeWindowKey] == true) {
+      // Keep the sole main IPC dispatcher and native service in window zero.
+      desktopType = DesktopType.remote;
+      final id = kWindowId!;
+      await initEnv(mrDeskHomeEventChannel(id));
+      if (bind.isIncomingOnly()) {
+        await closeMrDeskHomeWindow(id);
+        return;
+      }
+      _runApp('MRDesk', MrDeskIndependentHome(windowId: id),
+          MyTheme.currentThemeMode());
+      final controller = WindowController.fromWindowId(id);
+      await controller.setPreventClose(true);
+      await controller.showTitleBar(true);
+      await controller.setFrame(const Rect.fromLTWH(0, 0, 1100, 650));
+      await controller.center();
+      await controller.show();
+      await controller.focus();
+      return;
+    }
     int type = argument['type'] ?? -1;
     // to-do: No need to parse window id ?
     // Because stateGlobal.windowId is a global value.
