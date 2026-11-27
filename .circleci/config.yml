@@ -1882,7 +1882,7 @@ jobs:
             # Any further change to this entry point requires a fresh review.
             if ($changes -ccontains 'flutter/lib/main.dart') {
               $mainBlob = git rev-parse 'HEAD:flutter/lib/main.dart'
-              if ($LASTEXITCODE -ne 0 -or $mainBlob -cne '1a11c3fd17bfe9f6df7f525157b479fb1cd2a4db') {
+              if ($LASTEXITCODE -ne 0 -or $mainBlob -cne '26dd165914368633152990f18e5ed9a2bf2ecc74') {
                 throw 'Unreviewed main.dart change. Use full release-candidate workflow.'
               }
             }

@@ -145,6 +145,12 @@ Future<void> closeMrDeskHomeWindow(int id) async {
   // Hide only this HWND. Do not close the native connection manager or peers.
   await controller.hide();
   try {
+    // This channel is private to the home engine, never the main/remote stream.
+    await bind.stopGlobalEventStream(appType: mrDeskHomeEventChannel(id));
+  } catch (e) {
+    debugPrint('MR home event cleanup: $e');
+  }
+  try {
     await DesktopMultiWindow.invokeMethod(kMainWindowId, mrDeskHomeCloseMethod, null)
         .timeout(const Duration(seconds: 3));
   } catch (e) {

@@ -15,7 +15,6 @@ import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_client_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_technician_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_technician_windows.dart';
-import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -816,8 +815,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         debugPrint(
           "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
       }
-      if (useMrTechnicianLayout &&
-          isMrDeskHomeMethod(call.method)) {
+      if (isMrDeskHomeMethod(call.method) &&
+          (useMrTechnicianLayout || isMrDeskHomeWindow(fromWindowId))) {
         return handleMrDeskHomeMethod(call, fromWindowId);
       }
       if (isMrDeskHomeWindow(fromWindowId) &&
