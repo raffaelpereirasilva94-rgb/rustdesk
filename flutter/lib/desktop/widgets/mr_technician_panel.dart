@@ -46,7 +46,6 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
 
   final _id = IDTextEditingController();
   final _idFocus = FocusNode();
-  final _drafts = MrDeskDrafts();
   List<MrDeskSession> _sessions = [];
   bool _readingSessions = false;
   Timer? _sessionTimer;
@@ -145,19 +144,6 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     _id.dispose();
     super.dispose();
   }
-  // Keep independent connection drafts; opening one never closes a native session.
-  void _newDraft() {
-    setState(() => _id.text = _drafts.open(_id.text));
-    _idFocus.requestFocus();
-  }
-  void _selectDraft(int index) {
-    setState(() => _id.text = _drafts.select(index, _id.text));
-    _idFocus.requestFocus();
-  }
-  void _closeDraft(int index) {
-    setState(() => _id.text = _drafts.close(index, _id.text));
-  }
-
   // Native remote windows remain the owners of the live sessions. The
   // dashboard only lists and activates them through existing window IPC.
   Future<void> _refreshSessions() async {
@@ -208,11 +194,20 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     }
   }
 
-  void _connect() {
-    if (bind.isIncomingOnly() || _id.id.isEmpty) return;
+  void _connect() => _connectTo(_id.id);
+
+  // Use the same native connection path for the main field and new-session
+  // dialog. The native remote window manager owns session creation and tabs.
+  Future<void> _connectTo(String id) async {
+    if (!mounted || bind.isIncomingOnly() || id.isEmpty) return;
     FocusScope.of(context).unfocus();
-    _drafts.save(_id.text);
-    connect(context, _id.id);
+    try {
+      await connect(context, id);
+      if (mounted) _refreshSessions();
+    } catch (e) {
+      debugPrint('MR connection: $e');
+      if (mounted) showToast('Não foi possível iniciar a conexão.');
+    }
   }
   Future<void> _toggleFavorite(Peer peer) async {
     if (_updatingFavorites || !_visible(1)) return;
@@ -315,12 +310,15 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: _sessionTab('Nova sessão',
-                  selected: _drafts.selected == 0,
-                  onTap: () => _selectDraft(0)),
+                  selected: true,
+                  onTap: () => _idFocus.requestFocus()),
               ),
             ),
             if (constraints.maxWidth >= 36)
-              _chromeButton('Nova sessão', Icons.add_to_queue_outlined, _newDraft),
+              MrDeskNewSessionButton(
+                enabled: !bind.isIncomingOnly(),
+                onConnect: _connectTo,
+              ),
             Expanded(child: LayoutBuilder(builder: (context, space) {
               return Row(children: [
                 ConstrainedBox(
@@ -329,11 +327,6 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      for (int i = 1; i < _drafts.length; i++)
-                        _sessionTab('Nova sessão',
-                          selected: i == _drafts.selected,
-                          onTap: () => _selectDraft(i),
-                          onClose: () => _closeDraft(i)),
                       for (final session in _sessions)
                         _sessionTab(formatID(session.peerId),
                           selected: false,
@@ -408,7 +401,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     );
   }
   Widget _sessionTab(String label, {required bool selected,
-      required VoidCallback onTap, VoidCallback? onClose}) {
+      required VoidCallback onTap}) {
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -425,8 +418,6 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
             constraints: const BoxConstraints(maxWidth: 125),
             child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(color: _white, fontSize: 13))),
-          if (onClose != null)
-            _chromeButton('Fechar aba', Icons.close, onClose),
         ]),
       ),
     );
