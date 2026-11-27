@@ -1,6 +1,7 @@
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -756,7 +757,7 @@ abstract class BasePeerCard extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: Transform.scale(
                     scale: 0.8,
-                    child: IconButton(
+                    child: MrDeskIconButton(
                       icon: const Icon(Icons.edit),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
@@ -1459,7 +1460,7 @@ void _rdpDialog(String id) async {
                             decoration: InputDecoration(
                                 labelText:
                                     isDesktop ? null : translate('Password'),
-                                suffixIcon: IconButton(
+                                suffixIcon: MrDeskIconButton(
                                     onPressed: () =>
                                         secure.value = !secure.value,
                                     icon: Icon(secure.value

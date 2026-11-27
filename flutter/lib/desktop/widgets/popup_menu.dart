@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:core';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/rendering.dart' show RenderListBody;
 import 'package:get/get.dart';
 
@@ -266,7 +267,7 @@ class MenuEntryRadios<T> extends MenuEntryBase<T> {
                   child: Transform.scale(
                     scale: MenuConfig.iconScale,
                     child: Obx(() => opt.value == curOption.value
-                        ? IconButton(
+                        ? MrDeskIconButton(
                             padding:
                                 const EdgeInsets.fromLTRB(8.0, 0.0, 8.0, 0.0),
                             hoverColor: Colors.transparent,
@@ -383,7 +384,7 @@ class MenuEntrySubRadios<T> extends MenuEntryBase<T> {
                     child: Transform.scale(
                         scale: MenuConfig.iconScale,
                         child: Obx(() => opt.value == curOption.value
-                            ? IconButton(
+                            ? MrDeskIconButton(
                                 padding: EdgeInsets.zero,
                                 hoverColor: Colors.transparent,
                                 focusColor: Colors.transparent,

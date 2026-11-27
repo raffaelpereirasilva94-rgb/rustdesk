@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
@@ -436,7 +437,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
     ]);
   }
   Widget _chromeButton(String label, IconData icon, VoidCallback? action) {
-    return IconButton(
+    return MrDeskIconButton(
       tooltip: label, onPressed: action,
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints.tightFor(width: 36, height: 34),
@@ -539,7 +540,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                   message: peer.online ? 'Online' : 'Offline ou ainda não consultado',
                   child: Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle,
                     color: peer.online ? _green : const Color(0xFF9CA3AF))))),
-                if (_visible(1)) Positioned(top: 0, right: 1, child: IconButton(
+                if (_visible(1)) Positioned(top: 0, right: 1, child: MrDeskIconButton(
                   tooltip: favorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos',
                   onPressed: () => _toggleFavorite(peer),
                   icon: Icon(favorite ? Icons.star_rounded : Icons.star_border_rounded,
@@ -551,7 +552,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                 const SizedBox(width: 9),
                 Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: TextStyle(color: _white, fontSize: 13, fontWeight: FontWeight.w600))),
-                Builder(builder: (buttonContext) => IconButton(
+                Builder(builder: (buttonContext) => MrDeskIconButton(
                   padding: EdgeInsets.zero, constraints: const BoxConstraints.tightFor(width: 35, height: 34),
                   tooltip: 'Mais opções',
                   onPressed: () async {

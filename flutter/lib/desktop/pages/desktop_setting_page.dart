@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
@@ -318,7 +319,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     return Row(
       children: [
         if (isWeb)
-          IconButton(
+          MrDeskIconButton(
             onPressed: () {
               if (Navigator.canPop(context)) {
                 Navigator.pop(context);
@@ -3366,7 +3367,7 @@ void changeSocks5Proxy() async {
                         obscureText: obscure.value,
                         decoration: InputDecoration(
                             labelText: isMobile ? translate('Password') : null,
-                            suffixIcon: IconButton(
+                            suffixIcon: MrDeskIconButton(
                                 onPressed: () => obscure.value = !obscure.value,
                                 icon: Icon(obscure.value
                                     ? Icons.visibility_off

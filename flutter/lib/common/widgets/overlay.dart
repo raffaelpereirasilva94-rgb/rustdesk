@@ -1,6 +1,7 @@
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
@@ -93,7 +94,7 @@ class DraggableChatWindow extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              IconButton(
+              MrDeskIconButton(
                   onPressed: () {
                     chatModel.hideChatWindowOverlay();
                   },
@@ -101,7 +102,7 @@ class DraggableChatWindow extends StatelessWidget {
                     Icons.keyboard_arrow_down,
                     color: Colors.white,
                   )),
-              IconButton(
+              MrDeskIconButton(
                   onPressed: () {
                     chatModel.hideChatWindowOverlay();
                     chatModel.hideChatIconOverlay();
@@ -210,19 +211,19 @@ class DraggableMobileActions extends StatelessWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        IconButton(
+                        MrDeskIconButton(
                             color: Colors.white,
                             onPressed: onBackPressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
                             icon: const Icon(Icons.arrow_back),
                             iconSize: 24 * scale),
-                        IconButton(
+                        MrDeskIconButton(
                             color: Colors.white,
                             onPressed: onHomePressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
                             icon: const Icon(Icons.home),
                             iconSize: 24 * scale),
-                        IconButton(
+                        MrDeskIconButton(
                             color: Colors.white,
                             onPressed: onRecentPressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
@@ -234,7 +235,7 @@ class DraggableMobileActions extends StatelessWidget {
                           indent: 10,
                           endIndent: 10,
                         ),
-                        IconButton(
+                        MrDeskIconButton(
                             color: Colors.white,
                             onPressed: onHidePressed,
                             splashRadius: kDesktopIconButtonSplashRadius,

@@ -4,6 +4,7 @@ import 'package:bot_toast/bot_toast.dart';
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:dynamic_layouts/dynamic_layouts.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
@@ -590,7 +591,7 @@ class _AddressBookState extends State<AddressBook> {
                             labelText: stateGlobal.isPortrait.isFalse
                                 ? null
                                 : translate('Password'),
-                            suffixIcon: IconButton(
+                            suffixIcon: MrDeskIconButton(
                               icon: Icon(
                                   passwordVisible
                                       ? Icons.visibility

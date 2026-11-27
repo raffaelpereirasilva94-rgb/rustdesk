@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
@@ -411,7 +412,7 @@ Future<String> changeDirectAccessPort(
                             hintText: '21118',
                             isCollapsed: true,
                             prefix: Text('$currentIP : '),
-                            suffix: IconButton(
+                            suffix: MrDeskIconButton(
                                 padding: EdgeInsets.zero,
                                 icon: const Icon(Icons.clear, size: 16),
                                 onPressed: () => controller.clear())),
@@ -459,7 +460,7 @@ Future<String> changeAutoDisconnectTimeout(String old) async {
                         decoration: InputDecoration(
                             hintText: '10',
                             isCollapsed: true,
-                            suffix: IconButton(
+                            suffix: MrDeskIconButton(
                                 padding: EdgeInsets.zero,
                                 icon: const Icon(Icons.clear, size: 16),
                                 onPressed: () => controller.clear())),
@@ -875,7 +876,7 @@ class _PasswordWidgetState extends State<PasswordWidget> {
       hintText: translate(widget.hintText ?? 'Enter your password'),
       controller: widget.controller,
       prefixIcon: DialogTextField.kPasswordIcon,
-      suffixIcon: IconButton(
+      suffixIcon: MrDeskIconButton(
         icon: Icon(
             // Based on passwordVisible state choose the icon
             _passwordVisible ? Icons.visibility : Icons.visibility_off,
@@ -2628,7 +2629,7 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
               autofocus: true,
               obscureText: !passwordVisible,
               decoration: InputDecoration(
-                suffixIcon: IconButton(
+                suffixIcon: MrDeskIconButton(
                   icon: Icon(
                       passwordVisible ? Icons.visibility : Icons.visibility_off,
                       color: MyTheme.lightTheme.primaryColor),
@@ -3015,7 +3016,7 @@ Widget trustedDevicesTable(
               DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
                 Text(device.daysRemaining()),
                 if (device.expiresAt != 0)
-                  IconButton(
+                  MrDeskIconButton(
                     icon: Icon(Icons.refresh),
                     tooltip: translate('Renew trust'),
                     onPressed: () =>

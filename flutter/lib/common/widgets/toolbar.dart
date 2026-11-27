@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
@@ -484,7 +485,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
         ]),
         trailingIcon: Transform.scale(
           scale: (isDesktop || isWebDesktop) ? 0.8 : 1,
-          child: IconButton(
+          child: MrDeskIconButton(
             onPressed: () {
               if (isMobile && Navigator.canPop(context)) {
                 Navigator.pop(context);

@@ -1,5 +1,6 @@
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -203,12 +204,12 @@ List<Widget> ServerConfigImportExportWidgets(
   return [
     Tooltip(
       message: translate('Import server config'),
-      child: IconButton(
+      child: MrDeskIconButton(
           icon: Icon(Icons.paste, color: Colors.grey), onPressed: import),
     ),
     Tooltip(
         message: translate('Export Server Config'),
-        child: IconButton(
+        child: MrDeskIconButton(
             icon: Icon(Icons.copy, color: Colors.grey), onPressed: export))
   ];
 }

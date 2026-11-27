@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
@@ -402,7 +403,7 @@ class _CloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
+    return MrDeskIconButton(
       onPressed: () {
         windowManager.close();
       },
@@ -559,7 +560,7 @@ class _CmHeaderState extends State<_CmHeader>
                 (client.type_() != ClientType.remote &&
                     client.type_() != ClientType.file &&
                     client.type_() != ClientType.camera),
-            child: IconButton(
+            child: MrDeskIconButton(
               onPressed: () => checkClickTime(client.id, () {
                 if (client.type_() == ClientType.file) {
                   gFFI.chatModel.toggleCMFilePage();

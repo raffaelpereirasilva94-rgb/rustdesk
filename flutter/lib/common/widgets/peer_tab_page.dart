@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter_hbb/common/widgets/address_book.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/my_group.dart';
@@ -768,7 +769,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                       ).workaroundFreezeLinuxMint(),
                     ),
                     // Icon(Icons.close),
-                    IconButton(
+                    MrDeskIconButton(
                       alignment: Alignment.centerRight,
                       padding: const EdgeInsets.only(right: 2),
                       onPressed: () {

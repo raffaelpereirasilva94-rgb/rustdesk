@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 
 const mrDeskRemoteTabsMethod = 'mrdesk_remote_tabs_v1';
 
@@ -84,7 +85,7 @@ class MrDeskNewSessionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = MrDeskTechnicianPalette(
         Theme.of(context).brightness == Brightness.dark);
-    return IconButton(
+    return MrDeskIconButton(
       tooltip: 'Nova sessão',
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints.tightFor(width: 36, height: 34),
@@ -228,9 +229,9 @@ class MrDeskLocalId extends StatelessWidget {
               fontSize: 46, fontWeight: FontWeight.w600)),
           const SizedBox(width: 20),
           SizedBox(width: 160, child: Row(children: [
-            IconButton(tooltip: 'Informações do ID', onPressed: onInfo,
+            MrDeskIconButton(tooltip: 'Informações do ID', onPressed: onInfo,
                 icon: Icon(Icons.info_outline, color: palette.foreground, size: 22)),
-            IconButton(tooltip: 'Copiar ID', onPressed: onCopy,
+            MrDeskIconButton(tooltip: 'Copiar ID', onPressed: onCopy,
                 icon: const Icon(Icons.copy_outlined, size: 22)),
           ])),
         ]),

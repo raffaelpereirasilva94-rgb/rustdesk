@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
@@ -2105,7 +2106,7 @@ class _CustomScaleMenuControlsState
         child: Row(children: [
           Tooltip(
             message: translate('Decrease'),
-            child: IconButton(
+            child: MrDeskIconButton(
               iconSize: 16,
               padding: EdgeInsets.all(1),
               constraints: smallBtnConstraints,
@@ -2116,7 +2117,7 @@ class _CustomScaleMenuControlsState
           Expanded(child: sliderControl),
           Tooltip(
             message: translate('Increase'),
-            child: IconButton(
+            child: MrDeskIconButton(
               iconSize: 16,
               padding: EdgeInsets.all(1),
               constraints: smallBtnConstraints,

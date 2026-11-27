@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
@@ -710,7 +711,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           Positioned(
             top: 18,
             right: 0,
-            child: IconButton(
+            child: MrDeskIconButton(
               icon: Icon(
                 Icons.close,
                 color: Colors.white,

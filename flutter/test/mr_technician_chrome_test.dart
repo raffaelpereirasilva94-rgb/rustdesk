@@ -1,4 +1,7 @@
+import 'dart:ui' show PointerDeviceKind;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_hbb/desktop/widgets/mr_technician_chrome.dart';
 
@@ -43,7 +46,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: Scaffold(body:
       MrDeskNewSessionButton(enabled: false, onOpen: () async { opened = true; }),
     )));
-    expect(tester.widget<IconButton>(find.byType(IconButton)).onPressed, isNull);
+    expect(tester.widget<MrDeskIconButton>(find.byType(MrDeskIconButton)).onPressed, isNull);
     expect(opened, isFalse);
   });
   test('independent home launch has no destination and isolates event channels', () {
@@ -115,6 +118,58 @@ void main() {
     await tester.tap(button);
     expect(opened, 1);
     expect(tester.takeException(), isNull);
+  });
+  testWidgets('Windows icon hover stays inside its own button in both themes', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() { debugDefaultTargetPlatformOverride = null; });
+    const first = ValueKey('hover-first');
+    const second = ValueKey('hover-second');
+    const disabled = ValueKey('hover-disabled');
+    const hover = Color(0xFF5B7FE5);
+    var clicks = 0;
+    final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await pointer.addPointer(location: const Offset(500, 400));
+    addTearDown(pointer.removePointer);
+    Finder surface(Key key) => find.descendant(of: find.byKey(key),
+        matching: find.byWidgetPredicate((w) => w is ColoredBox && w.color == hover));
+    for (final material3 in [false, true]) {
+      for (final brightness in Brightness.values) {
+        await tester.pumpWidget(MaterialApp(theme: ThemeData(
+          useMaterial3: material3, brightness: brightness, hoverColor: hover,
+        ), home: Scaffold(body: Align(alignment: Alignment.topLeft,
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            MrDeskIconButton(key: first, constraints: const BoxConstraints.tightFor(width: 36, height: 34),
+                padding: EdgeInsets.zero, icon: const Icon(Icons.remove), onPressed: () => clicks++),
+            MrDeskIconButton(key: second, constraints: const BoxConstraints.tightFor(width: 36, height: 34),
+                padding: EdgeInsets.zero, icon: const Icon(Icons.close), onPressed: () {}),
+            const MrDeskIconButton(key: disabled, constraints: BoxConstraints.tightFor(width: 36, height: 34),
+                padding: EdgeInsets.zero, icon: Icon(Icons.add), onPressed: null),
+          ]),
+        ))));
+        await pointer.moveTo(const Offset(500, 400));
+        await tester.pumpAndSettle();
+        expect(surface(first), findsNothing);
+        final bounds = tester.getRect(find.byKey(first));
+        await pointer.moveTo(bounds.center);
+        await tester.pumpAndSettle();
+        expect(surface(first), findsOneWidget);
+        expect(tester.getRect(surface(first)), bounds);
+        expect(surface(second), findsNothing);
+        expect(surface(disabled), findsNothing);
+        await tester.tap(find.byKey(first));
+        await tester.pumpAndSettle();
+        await pointer.moveTo(tester.getCenter(find.byKey(second)));
+        await tester.pumpAndSettle();
+        expect(surface(first), findsNothing);
+        expect(surface(second), findsOneWidget);
+        await pointer.moveTo(tester.getCenter(find.byKey(disabled)));
+        await tester.pumpAndSettle();
+        expect(surface(second), findsNothing);
+        expect(surface(disabled), findsNothing);
+        expect(tester.takeException(), isNull);
+      }
+    }
+    expect(clicks, 4);
   });
   testWidgets('wordmark matches approved typography and colors', (tester) async {
     await tester.pumpWidget(MaterialApp(theme: ThemeData.dark(), home: const Scaffold(body: MrDeskWordmark())));

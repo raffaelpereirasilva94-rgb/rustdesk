@@ -25,6 +25,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 
 import '../../../common.dart';
 import '../../../consts.dart';
@@ -393,7 +394,7 @@ class KeyboardShortcutsPageBodyState extends State<KeyboardShortcutsPageBody> {
               ),
             ),
           ),
-          IconButton(
+          MrDeskIconButton(
             tooltip: widget.editButtonHint ?? translate('Edit'),
             onPressed: () => _onEdit(entry),
             icon: const Icon(Icons.edit_outlined, size: 18),
@@ -401,7 +402,7 @@ class KeyboardShortcutsPageBodyState extends State<KeyboardShortcutsPageBody> {
           SizedBox(
             width: 40,
             child: hasBinding
-                ? IconButton(
+                ? MrDeskIconButton(
                     tooltip: translate('Clear'),
                     onPressed: () => _onClear(entry),
                     icon: const Icon(Icons.close, size: 18),
@@ -434,13 +435,13 @@ class KeyboardShortcutsPageBodyState extends State<KeyboardShortcutsPageBody> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
+          MrDeskIconButton(
             tooltip: widget.editButtonHint ?? translate('Edit'),
             onPressed: () => _onEdit(entry),
             icon: const Icon(Icons.edit_outlined),
           ),
           if (hasBinding)
-            IconButton(
+            MrDeskIconButton(
               tooltip: translate('Clear'),
               onPressed: () => _onClear(entry),
               icon: const Icon(Icons.close),

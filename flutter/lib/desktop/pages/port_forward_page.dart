@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
@@ -272,7 +273,7 @@ class _PortForwardPageState extends State<PortForwardPage>
         text(pf.remotePort.toString()),
         SizedBox(
           width: _kColumn4Width,
-          child: IconButton(
+          child: MrDeskIconButton(
             icon: const Icon(Icons.close),
             onPressed: () async {
               await bind.sessionRemovePortForward(

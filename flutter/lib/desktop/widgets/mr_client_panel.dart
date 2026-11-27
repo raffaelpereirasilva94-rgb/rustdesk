@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/mr_desk_icon_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -77,7 +78,7 @@ class MrClientHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          IconButton(
+          MrDeskIconButton(
             tooltip: 'Configurações',
             padding: EdgeInsets.zero,
             icon: const Icon(Icons.menu_rounded, color: _white, size: 24),
@@ -90,13 +91,13 @@ class MrClientHeader extends StatelessWidget {
               child: const SizedBox.expand(),
             ),
           ),
-          IconButton(
+          MrDeskIconButton(
             tooltip: 'Minimizar',
             padding: EdgeInsets.zero,
             onPressed: () => windowManager.minimize(),
             icon: const Icon(Icons.remove, color: _white, size: 20),
           ),
-          IconButton(
+          MrDeskIconButton(
             tooltip: 'Fechar',
             padding: EdgeInsets.zero,
             onPressed: _quitClient,
