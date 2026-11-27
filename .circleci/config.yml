@@ -1854,24 +1854,25 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Checkout is not descended from approved baseline.' }
             $changes = @(git -c core.quotepath=true diff --no-renames --name-only $baseline HEAD --)
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect changed files.' }
-            # Reviewed typography-only changes: exact blobs, no dependency or ABI changes.
-            $typographyBlobs = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
-            $typographyBlobs.Add('flutter/lib/common.dart', '20e735490d6bf2af9fc8fa31fda0d8f517249bbb')
-            $typographyBlobs.Add('flutter/pubspec.yaml', '8aee68ece211627fdfae4327a86b4abac69172ab')
-            $typographyBlobs.Add('flutter/assets/Inter-Variable.ttf', '047c92f6e2212473dc436020afed689527076d44')
-            $typographyBlobs.Add('flutter/assets/Inter-Italic-Variable.ttf', 'c177578428248f08eedcc60e292acc6f414c2167')
-            $typographyBlobs.Add('flutter/assets/Inter-OFL.txt', '21f6aff961064c2e429f570995e446bcdd555422')
+            # Reviewed typography and Windows runner icon: exact blobs, no dependency or ABI changes.
+            $reviewedVisualBlobs = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
+            $reviewedVisualBlobs.Add('flutter/lib/common.dart', '20e735490d6bf2af9fc8fa31fda0d8f517249bbb')
+            $reviewedVisualBlobs.Add('flutter/pubspec.yaml', '8aee68ece211627fdfae4327a86b4abac69172ab')
+            $reviewedVisualBlobs.Add('flutter/assets/Inter-Variable.ttf', '047c92f6e2212473dc436020afed689527076d44')
+            $reviewedVisualBlobs.Add('flutter/assets/Inter-Italic-Variable.ttf', 'c177578428248f08eedcc60e292acc6f414c2167')
+            $reviewedVisualBlobs.Add('flutter/assets/Inter-OFL.txt', '21f6aff961064c2e429f570995e446bcdd555422')
+            $reviewedVisualBlobs.Add('flutter/windows/runner/resources/app_icon.ico', '0aa445108216cf651dfb9c0dbd9e38821c63694c')
             $blocked = @($changes | Where-Object {
               $_ -cne '.circleci/config.yml' -and
               $_ -cne 'flutter/lib/main.dart' -and
               $_ -cne 'flutter/test/mr_technician_chrome_test.dart' -and
-              -not $typographyBlobs.ContainsKey($_) -and
+              -not $reviewedVisualBlobs.ContainsKey($_) -and
               $_ -cnotmatch '^flutter/lib/(desktop/|common/widgets/)[A-Za-z0-9_./-]+\.dart$'
             })
-            foreach ($file in @($changes | Where-Object { $typographyBlobs.ContainsKey($_) })) {
+            foreach ($file in @($changes | Where-Object { $reviewedVisualBlobs.ContainsKey($_) })) {
               $blob = git rev-parse "HEAD:$file"
-              if ($LASTEXITCODE -ne 0 -or $blob -cne $typographyBlobs[$file]) {
-                throw "Unreviewed typography change: $file. Use full release-candidate workflow."
+              if ($LASTEXITCODE -ne 0 -or $blob -cne $reviewedVisualBlobs[$file]) {
+                throw "Unreviewed visual asset change: $file. Use full release-candidate workflow."
               }
             }
             if ($blocked.Count -gt 0) {
