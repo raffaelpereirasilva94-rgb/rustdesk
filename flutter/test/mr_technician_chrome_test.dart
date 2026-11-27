@@ -59,6 +59,63 @@ void main() {
     expect(mrDeskSameSessions(first, const [MrDeskSession(2, '123')]), isFalse);
     expect(mrDeskSameSessions(first, const []), isFalse);
   });
+  test('home session ownership isolates windows and preserves native moves', () {
+    final owners = MrDeskSessionOwners();
+    final now = DateTime(2026, 11, 27);
+    const a = MrDeskSession(11, '111');
+    const b = MrDeskSession(12, '222');
+    const c = MrDeskSession(12, '333');
+    owners.assign('222', 2, now);
+    owners.assign('333', 3, now);
+    owners.reconcile([a, b, c], now, complete: true);
+    expect(owners.forHome([a, b, c], 0), [a]);
+    expect(owners.forHome([a, b, c], 2), [b]);
+    expect(owners.forHome([a, b, c], 3), [c]);
+    expect(owners.forHome([a, b, c], 4), isEmpty);
+    const moved = MrDeskSession(19, '222');
+    owners.reconcile([a, moved, c], now, complete: true);
+    expect(owners.forHome([a, moved, c], 2), [moved]);
+    owners.releaseHome(2);
+    expect(owners.forHome([a, moved, c], 0), [a, moved]);
+    expect(owners.forHome([a, moved, c], 3), [c]);
+  });
+  test('ownership survives incomplete snapshots and expires after remote close', () {
+    final owners = MrDeskSessionOwners();
+    final now = DateTime(2026, 11, 27);
+    const session = MrDeskSession(10, '123');
+    owners.assign('123', 2, now);
+    owners.reconcile([], now, complete: true);
+    expect(owners.ownerOf('123'), 2);
+    owners.reconcile([session], now, complete: true);
+    owners.reconcile([], now, complete: false);
+    expect(owners.ownerOf('123'), 2);
+    owners.reconcile([], now, complete: true);
+    expect(owners.ownerOf('123'), 0);
+    owners.assign('456', 3, now);
+    owners.reconcile([], now.add(const Duration(seconds: 31)), complete: true);
+    expect(owners.ownerOf('456'), 0);
+  });
+  testWidgets('session header scrolls without covering new-window action', (tester) async {
+    var opened = 0;
+    final sessions = List.generate(8, (i) => MrDeskSession(i + 1, '12345678$i'));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: Align(
+      alignment: Alignment.topLeft,
+      child: SizedBox(width: 300, height: 36, child: Row(children: [
+        MrDeskNewSessionButton(enabled: true, onOpen: () async { opened++; }),
+        Expanded(child: MrDeskSessionTabs(sessions: sessions,
+          labelFor: (s) => s.peerId, onActivate: (_) {})),
+      ])),
+    ))));
+    expect(tester.takeException(), isNull);
+    final button = find.byTooltip('Nova sessão');
+    final tabs = find.byType(MrDeskSessionTabs);
+    expect(tester.getRect(button).right, lessThanOrEqualTo(tester.getRect(tabs).left));
+    await tester.drag(find.byType(SingleChildScrollView), const Offset(-180, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    expect(opened, 1);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('wordmark matches approved typography and colors', (tester) async {
     await tester.pumpWidget(MaterialApp(theme: ThemeData.dark(), home: const Scaffold(body: MrDeskWordmark())));
     final text = tester.widget<Text>(find.descendant(

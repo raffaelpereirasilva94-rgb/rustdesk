@@ -187,7 +187,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
         });
         return;
       }
-      final next = await readMrDeskRemoteSessions();
+      final next = await readMrDeskRemoteSessions(homeId: kMainWindowId);
       if (mounted && !mrDeskSameSessions(_sessions, next)) {
         setState(() => _sessions = next);
       }
@@ -339,7 +339,7 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
         Container(width: 1, height: 23, color: _border),
         Expanded(child: LayoutBuilder(builder: (context, constraints) {
           // Keep the plus button accessible even when many tabs are open.
-          final primaryWidth = (constraints.maxWidth - 36)
+          final primaryWidth = (constraints.maxWidth - 44)
               .clamp(0.0, 132.0).toDouble();
           return Row(children: [
             SizedBox(
@@ -351,24 +351,23 @@ class _MrTechnicianPanelState extends State<MrTechnicianPanel> with WindowListen
                   onTap: () => _idFocus.requestFocus()),
               ),
             ),
-            if (constraints.maxWidth >= 36)
+            if (constraints.maxWidth >= 44) ...[
+              const SizedBox(width: 4),
               MrDeskNewSessionButton(
                 enabled: !bind.isIncomingOnly() && !_openingWindow,
                 onOpen: _newWindow,
               ),
+              const SizedBox(width: 4),
+            ],
             Expanded(child: LayoutBuilder(builder: (context, space) {
               return Row(children: [
                 ConstrainedBox(
                   constraints: BoxConstraints(
                     maxWidth: (space.maxWidth - 16).clamp(0.0, space.maxWidth).toDouble()),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      for (final session in _sessions)
-                        _sessionTab(formatID(session.peerId),
-                          selected: false,
-                          onTap: () => _activateSession(session)),
-                    ]),
+                  child: MrDeskSessionTabs(
+                    sessions: _sessions,
+                    labelFor: (session) => formatID(session.peerId),
+                    onActivate: _activateSession,
                   ),
                 ),
                 Expanded(child: GestureDetector(

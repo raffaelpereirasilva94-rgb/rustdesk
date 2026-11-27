@@ -14,6 +14,7 @@ import 'package:flutter_hbb/utils/multi_window_manager.dart';
 
 // Owned by window zero only. Other engines use restricted, credential-free IPC.
 final _homeWindows = <int>{};
+final _sessionOwners = MrDeskSessionOwners();
 DateTime _lastPeerRefresh = DateTime.fromMillisecondsSinceEpoch(0);
 bool _refreshingPeers = false;
 
@@ -45,7 +46,18 @@ Future<bool> openMrDeskHomeWindow() async {
   }
 }
 
-Future<List<MrDeskSession>> readMrDeskRemoteSessions() async {
+// Serialize native snapshot/ownership updates, including connection requests
+// from secondary homes. Never infer an owner from the globally shared history.
+Future<void> _ownershipQueue = Future<void>.value();
+
+Future<T> _withOwnership<T>(Future<T> Function() action) {
+  final result = _ownershipQueue.then((_) => action());
+  _ownershipQueue = result.then<void>((_) {}, onError: (Object e, StackTrace s) {});
+  return result;
+}
+
+Future<List<MrDeskSession>> _readNativeRemoteSessions() async {
+  var complete = true;
   final ids = rustDeskWinManager.getActiveWindows()
       .where((id) => id != kMainWindowId && !isMrDeskHomeWindow(id)).toList();
   final groups = await Future.wait(ids.map((windowId) async {
@@ -55,17 +67,63 @@ Future<List<MrDeskSession>> readMrDeskRemoteSessions() async {
           .timeout(const Duration(seconds: 2));
       if (raw is! String) return <MrDeskSession>[];
       final peers = jsonDecode(raw);
-      if (peers is! List) return <MrDeskSession>[];
+      if (peers is! List) {
+        complete = false;
+        return <MrDeskSession>[];
+      }
       return peers.whereType<String>().where((id) => id.isNotEmpty)
           .map((id) => MrDeskSession(windowId, id)).toList();
     } catch (_) {
+      // An IPC timeout is not evidence that a session has ended.
+      complete = false;
       return <MrDeskSession>[];
     }
   }));
   final current = rustDeskWinManager.getActiveWindows();
-  return groups.expand((group) => group)
+  final sessions = groups.expand((group) => group)
       .where((session) => current.contains(session.windowId)).toList();
+  _sessionOwners.reconcile(sessions, DateTime.now(), complete: complete);
+  return sessions;
 }
+
+Future<List<MrDeskSession>> readMrDeskRemoteSessions({int homeId = 0}) =>
+    _withOwnership(() async =>
+      _sessionOwners.forHome(await _readNativeRemoteSessions(), homeId));
+
+// Preserve all native connection options and duplicate-session activation.
+// A request from a new home only owns a destination not already live.
+Future<bool> connectMrDeskHomeRemote(int homeId, Map<dynamic, dynamic> args) =>
+    _withOwnership(() async {
+      if (!isMrDeskHomeWindow(homeId) || bind.isIncomingOnly()) return false;
+      final id = args['id'];
+      if (id is! String || id.isEmpty) return false;
+      final before = await _readNativeRemoteSessions();
+      final existed = before.any((s) => s.peerId == id);
+      final previousOwner = _sessionOwners.ownerOf(id);
+      if (!existed) _sessionOwners.assign(id, homeId, DateTime.now());
+      try {
+        final result = await rustDeskWinManager.newRemoteDesktop(id,
+          password: args['password'] as String?,
+          loginMethod: args['loginMethod'] as String? ?? '',
+          isSharedPassword: args['isSharedPassword'] as bool?,
+          forceRelay: args['forceRelay'] as bool?,
+        );
+        if (result.windowId <= 0) {
+          if (!existed) _sessionOwners.forget(id);
+          return false;
+        }
+        if (!isMrDeskHomeWindow(homeId) && !existed) _sessionOwners.forget(id);
+        return true;
+      } catch (_) {
+        if (!existed) {
+          _sessionOwners.forget(id);
+          if (previousOwner != 0) {
+            _sessionOwners.assign(id, previousOwner, DateTime.now());
+          }
+        }
+        rethrow;
+      }
+    });
 
 List<Map<String, dynamic>> _peerSnapshot(List<Peer> peers) =>
     peers.take(1000).map((p) => <String, dynamic>{
@@ -104,6 +162,7 @@ Future<dynamic> handleMrDeskHomeMethod(MethodCall call, int fromWindowId) async 
   if (!isMrDeskHomeWindow(fromWindowId)) return null;
   if (call.method == mrDeskHomeCloseMethod) {
     _homeWindows.remove(fromWindowId);
+    _sessionOwners.releaseHome(fromWindowId);
     await rustDeskWinManager.unregisterActiveWindow(fromWindowId);
     return true;
   }
@@ -122,7 +181,7 @@ Future<dynamic> handleMrDeskHomeMethod(MethodCall call, int fromWindowId) async 
       // The native peer events go only to the original main engine.
       _refreshSharedPeers();
       final visible = gFFI.peerTabModel.isVisibleEnabled;
-      final sessions = await readMrDeskRemoteSessions();
+      final sessions = await readMrDeskRemoteSessions(homeId: fromWindowId);
       return jsonEncode({
         'recent': visible[0] ? _peerSnapshot(gFFI.recentPeersModel.peers) : [],
         'favorites': visible[1] ? _peerSnapshot(gFFI.favoritePeersModel.peers) : [],

@@ -17,6 +17,49 @@ bool mrDeskSameSessions(List<MrDeskSession> a, List<MrDeskSession> b) {
   return true;
 }
 
+// Session ownership belongs to the home window that initiated the connection.
+// Native remote windows may contain several peers or move a peer between tabs;
+// the destination ID is stable across those UI operations. Unknown native
+// sessions belong to the primary home (zero), never to every home.
+class MrDeskSessionOwners {
+  final _owners = <String, int>{};
+  final _pendingUntil = <String, DateTime>{};
+
+  void assign(String peerId, int homeId, DateTime now) {
+    _owners[peerId] = homeId;
+    _pendingUntil[peerId] = now.add(const Duration(seconds: 30));
+  }
+
+  int ownerOf(String peerId) => _owners[peerId] ?? 0;
+
+  void forget(String peerId) {
+    _owners.remove(peerId);
+    _pendingUntil.remove(peerId);
+  }
+
+  void releaseHome(int homeId) {
+    // Closing a home must not close its native remote connections.
+    final ids = _owners.entries.where((e) => e.value == homeId)
+        .map((e) => e.key).toList();
+    for (final id in ids) { forget(id); }
+  }
+
+  void reconcile(List<MrDeskSession> sessions, DateTime now,
+      {required bool complete}) {
+    final live = sessions.map((s) => s.peerId).toSet();
+    for (final id in live) { _pendingUntil.remove(id); }
+    if (!complete) return;
+    for (final id in _owners.keys.toList()) {
+      if (live.contains(id)) continue;
+      final until = _pendingUntil[id];
+      if (until == null || !now.isBefore(until)) forget(id);
+    }
+  }
+
+  List<MrDeskSession> forHome(List<MrDeskSession> sessions, int homeId) =>
+      sessions.where((s) => ownerOf(s.peerId) == homeId).toList();
+}
+
 // A new home window has no remote ID or credentials in its launch payload.
 const mrDeskHomeWindowKey = 'mrdesk_home_window_v1';
 const mrDeskHomeOpenMethod = 'mrdesk_home_open_v1';
@@ -48,6 +91,63 @@ class MrDeskNewSessionButton extends StatelessWidget {
       icon: Icon(Icons.add_to_queue_outlined, size: 19,
           color: enabled ? palette.foreground : palette.border),
       onPressed: enabled ? onOpen : null,
+    );
+  }
+}
+
+// Tabs are visually separated from the new-window action. Keep them in
+// their own scrolling area so they cannot overlap window controls.
+class MrDeskSessionTabs extends StatelessWidget {
+  const MrDeskSessionTabs({super.key, required this.sessions,
+      required this.onActivate, required this.labelFor});
+  final List<MrDeskSession> sessions;
+  final ValueChanged<MrDeskSession> onActivate;
+  final String Function(MrDeskSession) labelFor;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = MrDeskTechnicianPalette(
+        Theme.of(context).brightness == Brightness.dark);
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        for (final session in sessions)
+          Padding(
+            key: ValueKey((session.windowId, session.peerId)),
+            padding: const EdgeInsets.only(left: 8),
+            child: Tooltip(
+              message: labelFor(session),
+              child: Material(
+                color: palette.surface,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(5),
+                  side: BorderSide(color: palette.border),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(5),
+                  onTap: () => onActivate(session),
+                  child: SizedBox(
+                    height: 28,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.desktop_windows_outlined,
+                            color: palette.muted, size: 16),
+                        const SizedBox(width: 7),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 142),
+                          child: Text(labelFor(session), maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: palette.foreground, fontSize: 13)),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ]),
     );
   }
 }

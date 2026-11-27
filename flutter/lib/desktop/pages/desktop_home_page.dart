@@ -837,6 +837,17 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       } else if (call.method == kWindowEventHide) {
         await rustDeskWinManager.unregisterActiveWindow(call.arguments['id']);
       } else if (call.method == kWindowConnect) {
+        // Normal remote desktop connections from a secondary MRDesk home
+        // retain that origin. Other native connection types are unchanged.
+        if (isMrDeskHomeWindow(fromWindowId) &&
+            call.arguments['isFileTransfer'] != true &&
+            call.arguments['isViewCamera'] != true &&
+            call.arguments['isTerminal'] != true &&
+            call.arguments['isTcpTunneling'] != true &&
+            call.arguments['isRDP'] != true) {
+          return connectMrDeskHomeRemote(fromWindowId,
+              Map<dynamic, dynamic>.from(call.arguments as Map));
+        }
         await connectMainDesktop(
           call.arguments['id'],
           isFileTransfer: call.arguments['isFileTransfer'],
